@@ -124,17 +124,14 @@ describe("cursor live run coordinator", () => {
 		expect(coordinator.getActiveForScope("scope-b")).toBe(otherScope);
 	});
 
-	it("ignores future SDK turn usage after a split turn times out", async () => {
-		vi.useFakeTimers();
+	it("accumulates SDK turn usage across late turn-ended events until the next take", async () => {
 		const { coordinator } = makeCoordinator();
 		const run = startRun(coordinator);
 
-		coordinator.ignoreFutureSdkTurnUsage(run);
-		coordinator.queueEvent(run, { type: "text-delta", text: "next turn started" });
 		coordinator.recordSdkTurnEnded(run, { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 });
-		await vi.advanceTimersByTimeAsync(1000);
 		coordinator.recordSdkTurnEnded(run, { inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, cacheWriteTokens: 8 });
 
+		expect(coordinator.takeSdkTurnUsage(run)).toEqual({ inputTokens: 6, outputTokens: 8, cacheReadTokens: 10, cacheWriteTokens: 12 });
 		expect(coordinator.takeSdkTurnUsage(run)).toBeUndefined();
 	});
 

@@ -26,11 +26,27 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
 	};
 }
 
+export function sumCursorSdkTurnUsage(a: CursorSdkTurnUsage, b: CursorSdkTurnUsage): CursorSdkTurnUsage {
+	return {
+		inputTokens: a.inputTokens + b.inputTokens,
+		outputTokens: a.outputTokens + b.outputTokens,
+		cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+		cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+	};
+}
+
+/**
+ * Records an SDK `turn-ended` usage event. Usage is accumulated (summed) rather than
+ * overwritten so that a late-arriving event is never lost when multiple land between
+ * takes. The next `takeCursorLiveSdkTurnUsage` consumes the accumulated total.
+ */
 export function recordCursorLiveSdkTurnEnded(
 	state: CursorLiveRunAccountingState,
 	sdkTurnUsage?: CursorSdkTurnUsage,
 ): CursorLiveRunAccountingState {
-	return { ...state, sdkTurnEnded: true, sdkTurnUsage };
+	if (!sdkTurnUsage) return { ...state, sdkTurnEnded: true };
+	const nextSdkTurnUsage = state.sdkTurnUsage ? sumCursorSdkTurnUsage(state.sdkTurnUsage, sdkTurnUsage) : sdkTurnUsage;
+	return { ...state, sdkTurnEnded: true, sdkTurnUsage: nextSdkTurnUsage };
 }
 
 export function takeCursorLiveSdkTurnUsage(state: CursorLiveRunAccountingState): {

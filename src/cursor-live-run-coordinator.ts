@@ -41,7 +41,6 @@ export interface CursorLiveRun {
 	sessionBridgeRun?: CursorPiToolBridgeRun;
 	sessionAgentScopeKey: string;
 	sdkRun?: CursorLiveSdkRun;
-	ignoreFutureSdkTurnUsage?: boolean;
 	accounting: CursorLiveRunAccountingState;
 	pendingEvents: CursorLiveQueuedEvent[];
 	textDeltas: string[];
@@ -83,7 +82,6 @@ export interface CursorLiveRunCoordinator {
 	markCancelled(run: CursorLiveRun, abortMessage?: string): void;
 	markError(run: CursorLiveRun, errorMessage: string): void;
 	recordSdkTurnEnded(run: CursorLiveRun, usage?: CursorSdkTurnUsage): void;
-	ignoreFutureSdkTurnUsage(run: CursorLiveRun): void;
 	hasSdkTurnEnded(run: CursorLiveRun): boolean;
 	queueEvent(run: CursorLiveRun, event: CursorLiveQueuedEvent): void;
 	peekEvent(run: CursorLiveRun): CursorLiveQueuedEvent | undefined;
@@ -339,17 +337,8 @@ export function createCursorLiveRunCoordinator(deps: CursorLiveRunCoordinatorDep
 
 		recordSdkTurnEnded(run, usage): void {
 			if (run.disposed) return;
-			if (run.ignoreFutureSdkTurnUsage) {
-				run.accounting = { ...run.accounting, sdkTurnEnded: false, sdkTurnUsage: undefined };
-				notifyProgress(run);
-				return;
-			}
 			run.accounting = recordCursorLiveSdkTurnEnded(run.accounting, usage);
 			notifyProgress(run);
-		},
-
-		ignoreFutureSdkTurnUsage(run): void {
-			if (!run.disposed) run.ignoreFutureSdkTurnUsage = true;
 		},
 
 		hasSdkTurnEnded(run): boolean {

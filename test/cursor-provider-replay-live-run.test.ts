@@ -263,7 +263,7 @@ describe("streamCursor native replay live run", () => {
 		expect(replayDone.message.content).toEqual([{ type: "text", text: "Final answer only." }]);
 	});
 
-	it("ignores later SDK usage after a split turn times out waiting for usage", async () => {
+	it("captures SDK usage on a later turn even when an earlier split turn times out", async () => {
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
 		const registeredTools: RegisteredTool[] = [];
 		await registerNativeToolDisplayForTest(registeredTools);
@@ -343,8 +343,8 @@ describe("streamCursor native replay live run", () => {
 		const secondDone = getDoneEvent(await secondEventsPromise);
 		const secondToolCall = secondDone.message.content.find(isToolCallBlock);
 		expect(secondDone.reason).toBe("toolUse");
-		expect(secondDone.message.usage.input).not.toBe(40_000);
-		expect(secondDone.message.usage.cacheRead).toBe(0);
+		expect(secondDone.message.usage.input).toBe(40_000);
+		expect(secondDone.message.usage.cacheRead).toBe(39_000);
 		expect(secondDone.message.usage.cacheWrite).toBe(0);
 
 		const secondToolResult = await readTool!.execute(secondToolCall!.id, secondToolCall!.arguments, undefined, undefined, createExtensionTestContext());

@@ -265,7 +265,7 @@ async function emitCursorLiveRunPendingToolUseTurn(
 	const eventType = cursorLiveRuns.peekEvent(run)?.type;
 	if (eventType !== "tool" && eventType !== "bridge-tool") return undefined;
 	await settleCursorLiveToolBatch(run);
-	const sdkTurnEnded = await waitForCursorLiveSdkTurnEnded(run, options.signal);
+	await waitForCursorLiveSdkTurnEnded(run, options.signal);
 	if (options.signal?.aborted) throw new CursorLiveRunAbortError();
 	if (eventType === "tool") {
 		const { active, inactive } = partitionNativeToolsByActiveContext(context, cursorLiveRuns.collectNativeToolBatch(run));
@@ -274,11 +274,9 @@ async function emitCursorLiveRunPendingToolUseTurn(
 			// Inactive-only batch: trace was emitted above; do not emit toolUse.
 			return "handled";
 		}
-		if (!sdkTurnEnded) cursorLiveRuns.ignoreFutureSdkTurnUsage(run);
 		if (options.mode === "emit") turn.emitter.closeAll();
 		emitCursorNativeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, active, debugRecorder);
 	} else {
-		if (!sdkTurnEnded) cursorLiveRuns.ignoreFutureSdkTurnUsage(run);
 		if (options.mode === "emit") turn.emitter.closeAll();
 		const requests = cursorLiveRuns.collectBridgeToolBatch(run);
 		emitCursorBridgeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, requests);

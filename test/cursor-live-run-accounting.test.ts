@@ -77,6 +77,23 @@ describe("cursor live-run accounting", () => {
 		expect(second.sdkTurnUsage).toBeUndefined();
 	});
 
+	it("accumulates multiple turn-ended usages until taken", () => {
+		const afterFirst = recordCursorLiveSdkTurnEnded(
+			createCursorLiveRunAccountingState(100),
+			{ inputTokens: 100, outputTokens: 10, cacheReadTokens: 50, cacheWriteTokens: 5 },
+		);
+		const afterSecond = recordCursorLiveSdkTurnEnded(
+			afterFirst,
+			{ inputTokens: 200, outputTokens: 20, cacheReadTokens: 60, cacheWriteTokens: 0 },
+		);
+
+		const taken = takeCursorLiveSdkTurnUsage(afterSecond);
+
+		expect(taken.sdkTurnUsage).toEqual({ inputTokens: 300, outputTokens: 30, cacheReadTokens: 110, cacheWriteTokens: 5 });
+		expect(taken.state.sdkTurnUsage).toBeUndefined();
+		expect(taken.state.sdkTurnEnded).toBe(false);
+	});
+
 	it("ignores nonmatching tool results without consuming them", () => {
 		const promptInputTokens = 25;
 		const toolResult = makeToolResult("unrelated-tool-1", "not for this live run");
