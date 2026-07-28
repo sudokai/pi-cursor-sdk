@@ -1,5 +1,13 @@
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import type { SDKAgent } from "@cursor/sdk";
+
+const DEFAULT_TURN_ENDED_RECONCILE_MS = 500;
+const TURN_ENDED_RECONCILE_MS_ENV = "PI_CURSOR_TURN_ENDED_WAIT_MS";
+
+function resolveCursorTurnEndedReconcileMs(): number {
+	const raw = Number(process.env[TURN_ENDED_RECONCILE_MS_ENV]);
+	return Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : DEFAULT_TURN_ENDED_RECONCILE_MS;
+}
 import {
 	consumeCursorLiveToolResults,
 	createCursorLiveRunAccountingState,
@@ -83,6 +91,15 @@ export interface CursorLiveRunCoordinator {
 	markError(run: CursorLiveRun, errorMessage: string): void;
 	recordSdkTurnEnded(run: CursorLiveRun, usage?: CursorSdkTurnUsage): void;
 	hasSdkTurnEnded(run: CursorLiveRun): boolean;
+	/**
+	 * Bounded wait for the SDK `turn-ended` event so its usage is recorded before the run is
+	 * marked finished. `run.wait()` resolves at the same instant the single end-of-run
+	 * `turn-ended` callback fires; without this reconcile the stop turn can take usage just
+	 * before it is recorded and fall back to approximate (`cacheRead=0`). The SDK emits one
+	 * `turn-ended` per run at completion (~10-150ms after `step-completed`); the deadline only
+	 * elapses when usage is genuinely absent. Override via `PI_CURSOR_TURN_ENDED_WAIT_MS`.
+	 */
+	reconcileSdkTurnEnded(run: CursorLiveRun, signal?: AbortSignal): Promise<void>;
 	queueEvent(run: CursorLiveRun, event: CursorLiveQueuedEvent): void;
 	peekEvent(run: CursorLiveRun): CursorLiveQueuedEvent | undefined;
 	shiftEvent(run: CursorLiveRun): CursorLiveQueuedEvent | undefined;
@@ -343,6 +360,21 @@ export function createCursorLiveRunCoordinator(deps: CursorLiveRunCoordinatorDep
 
 		hasSdkTurnEnded(run): boolean {
 			return run.accounting.sdkTurnEnded;
+		},
+
+		async reconcileSdkTurnEnded(run, signal): Promise<void> {
+			const deadline = Date.now() + resolveCursorTurnEndedReconcileMs();
+			while (
+				!coordinator.hasSdkTurnEnded(run) &&
+				!run.disposed &&
+				!run.cancelled &&
+				!run.errorMessage
+			) {
+				const remainingMs = deadline - Date.now();
+				if (remainingMs <= 0) return;
+				await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remainingMs)));
+				if (signal?.aborted) throw new CursorLiveRunAbortError();
+			}
 		},
 
 		queueEvent(run, event): void {

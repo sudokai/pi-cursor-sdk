@@ -124,14 +124,14 @@ describe("cursor live run coordinator", () => {
 		expect(coordinator.getActiveForScope("scope-b")).toBe(otherScope);
 	});
 
-	it("accumulates SDK turn usage across late turn-ended events until the next take", async () => {
+	it("keeps the latest SDK turn-ended usage until the next take (never sums)", async () => {
 		const { coordinator } = makeCoordinator();
 		const run = startRun(coordinator);
 
 		coordinator.recordSdkTurnEnded(run, { inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 });
 		coordinator.recordSdkTurnEnded(run, { inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, cacheWriteTokens: 8 });
 
-		expect(coordinator.takeSdkTurnUsage(run)).toEqual({ inputTokens: 6, outputTokens: 8, cacheReadTokens: 10, cacheWriteTokens: 12 });
+		expect(coordinator.takeSdkTurnUsage(run)).toEqual({ inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, cacheWriteTokens: 8 });
 		expect(coordinator.takeSdkTurnUsage(run)).toBeUndefined();
 	});
 

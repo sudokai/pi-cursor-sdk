@@ -77,7 +77,9 @@ describe("cursor live-run accounting", () => {
 		expect(second.sdkTurnUsage).toBeUndefined();
 	});
 
-	it("accumulates multiple turn-ended usages until taken", () => {
+	it("keeps the latest turn-ended usage until taken (never sums)", () => {
+		// Per-turn SDK usage must overwrite, not accumulate: summing double-counts tokens
+		// across turns and inflates usage (see docs/investigations/cursor-live-run-turn-ended-usage-2026-07-27.md).
 		const afterFirst = recordCursorLiveSdkTurnEnded(
 			createCursorLiveRunAccountingState(100),
 			{ inputTokens: 100, outputTokens: 10, cacheReadTokens: 50, cacheWriteTokens: 5 },
@@ -89,7 +91,7 @@ describe("cursor live-run accounting", () => {
 
 		const taken = takeCursorLiveSdkTurnUsage(afterSecond);
 
-		expect(taken.sdkTurnUsage).toEqual({ inputTokens: 300, outputTokens: 30, cacheReadTokens: 110, cacheWriteTokens: 5 });
+		expect(taken.sdkTurnUsage).toEqual({ inputTokens: 200, outputTokens: 20, cacheReadTokens: 60, cacheWriteTokens: 0 });
 		expect(taken.state.sdkTurnUsage).toBeUndefined();
 		expect(taken.state.sdkTurnEnded).toBe(false);
 	});

@@ -26,27 +26,22 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
 	};
 }
 
-export function sumCursorSdkTurnUsage(a: CursorSdkTurnUsage, b: CursorSdkTurnUsage): CursorSdkTurnUsage {
-	return {
-		inputTokens: a.inputTokens + b.inputTokens,
-		outputTokens: a.outputTokens + b.outputTokens,
-		cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
-		cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
-	};
-}
-
 /**
- * Records an SDK `turn-ended` usage event. Usage is accumulated (summed) rather than
- * overwritten so that a late-arriving event is never lost when multiple land between
- * takes. The next `takeCursorLiveSdkTurnUsage` consumes the accumulated total.
+ * Records an SDK `turn-ended` usage event. The latest per-turn usage overwrites any
+ * pending value (it is never summed): the SDK emits per-turn usage via `toTokenUsage`,
+ * and cross-turn summing is a separate opt-in helper (`sumTokenUsage`) that double-counts
+ * if applied here. `turn-ended` is also not carried forward across pi turns: if it arrives
+ * after its turn has emitted it belongs to a turn that already fell back to approximate,
+ * and applying it to a later turn would mis-attribute usage (see
+ * `docs/investigations/cursor-live-run-turn-ended-usage-2026-07-27.md` and the contract in
+ * `docs/cursor-model-ux-spec.md`). The next `takeCursorLiveSdkTurnUsage` consumes the
+ * recorded value.
  */
 export function recordCursorLiveSdkTurnEnded(
 	state: CursorLiveRunAccountingState,
 	sdkTurnUsage?: CursorSdkTurnUsage,
 ): CursorLiveRunAccountingState {
-	if (!sdkTurnUsage) return { ...state, sdkTurnEnded: true };
-	const nextSdkTurnUsage = state.sdkTurnUsage ? sumCursorSdkTurnUsage(state.sdkTurnUsage, sdkTurnUsage) : sdkTurnUsage;
-	return { ...state, sdkTurnEnded: true, sdkTurnUsage: nextSdkTurnUsage };
+	return { ...state, sdkTurnEnded: true, sdkTurnUsage };
 }
 
 export function takeCursorLiveSdkTurnUsage(state: CursorLiveRunAccountingState): {

@@ -107,6 +107,9 @@ export class CursorRunFinalizer {
 			contextWindowAgentId: liveRun.agent.agentId,
 		})
 			.then(async (finalized) => {
+				if (!liveRun.disposed && finalized.outcome.kind === "finished") {
+					await cursorLiveRuns.reconcileSdkTurnEnded(liveRun, runnerParams.options?.signal);
+				}
 				applyLiveRunOutcome(finalized.outcome, prepared, runnerParams.context);
 			})
 			.catch((error: unknown) => {

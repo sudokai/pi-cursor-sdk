@@ -364,6 +364,151 @@ describe("streamCursor native replay live run", () => {
 		expect(getDoneEvent(await collectEvents(streamCursor(makeModel(), replayContext, { apiKey: "test-key" }))).reason).toBe("stop");
 	});
 
+	it("never sums cross-turn usage: an emitted turn reports only the latest turn-ended", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
+		const registeredTools: RegisteredTool[] = [];
+		await registerNativeToolDisplayForTest(registeredTools);
+
+		let firstOnDelta: CursorDeltaHandler | undefined;
+		let resolveRun: (result: { id: string; status: "finished"; result: string }) => void = () => {};
+		const runWait = vi.fn(
+			() =>
+				new Promise<{ id: string; status: "finished"; result: string }>((resolve) => {
+					resolveRun = resolve;
+				}),
+		);
+		const mockSend = vi.fn().mockImplementation(async (_msg: unknown, opts: { onDelta: CursorDeltaHandler }) => {
+			firstOnDelta = opts.onDelta;
+			opts.onDelta({ update: { type: "tool-call-started", toolCall: { name: "read", args: { path: "README.md" } }, callId: "late-1" } });
+			opts.onDelta({
+				update: {
+					type: "tool-call-completed",
+					toolCall: { name: "read", result: { status: "success", value: { content: "# pi-cursor-sdk" } } },
+					callId: "late-1",
+				},
+			});
+			return asMockCursorRun({ id: "run-late", agentId: "agent-1", status: "running", wait: runWait, cancel: vi.fn(), supports: () => true, unsupportedReason: () => undefined });
+		});
+		mockCreatedAgent({ agentId: "agent-1", send: mockSend, [Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined) });
+
+		const firstEventsPromise = collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+		while (!firstOnDelta) await new Promise((resolve) => setTimeout(resolve, 0));
+		const firstDone = getDoneEvent(await firstEventsPromise);
+		const toolCall = firstDone.message.content.find(isToolCallBlock);
+		const readTool = registeredTools.find((tool) => tool.name === "read");
+		const toolResult = await readTool!.execute(toolCall!.id, toolCall!.arguments, undefined, undefined, createExtensionTestContext());
+
+		const replayContext = makeContext();
+		replayContext.messages = [
+			...replayContext.messages,
+			firstDone.message,
+			{ role: "toolResult", toolCallId: toolCall!.id, toolName: "read", content: toolResult.content, details: toolResult.details, isError: false, timestamp: 2 },
+		];
+
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		const secondEventsPromise = collectEvents(streamCursor(makeModel(), replayContext, { apiKey: "test-key" }));
+		setTimeout(() => {
+			firstOnDelta?.({ update: { type: "tool-call-started", toolCall: { name: "read", args: { path: "package.json" } }, callId: "second-1" } });
+			firstOnDelta?.({
+				update: {
+					type: "tool-call-completed",
+					toolCall: { name: "read", result: { status: "success", value: { content: "{\"name\":\"pi-cursor-sdk\"}" } } },
+					callId: "second-1",
+				},
+			});
+			// Two turn-ended events land in the same drain window. The emitted turn must keep
+			// the LATEST per-turn usage, never the cross-turn sum (regression for 5df250a).
+			firstOnDelta?.({ update: { type: "turn-ended", usage: { inputTokens: 10_000, outputTokens: 100, cacheReadTokens: 5_000, cacheWriteTokens: 0 } } });
+			firstOnDelta?.({ update: { type: "turn-ended", usage: { inputTokens: 20_000, outputTokens: 200, cacheReadTokens: 10_000, cacheWriteTokens: 0 } } });
+		}, 0);
+
+		const secondDone = getDoneEvent(await secondEventsPromise);
+		const secondToolCall = secondDone.message.content.find(isToolCallBlock);
+		expect(secondDone.message.usage.input).toBe(20_000);
+		expect(secondDone.message.usage.cacheRead).toBe(10_000);
+		expect(secondDone.message.usage.totalTokens).toBe(30_200);
+
+		const secondToolResult = await readTool!.execute(secondToolCall!.id, secondToolCall!.arguments, undefined, undefined, createExtensionTestContext());
+		resolveRun({ id: "run-late", status: "finished", result: "done" });
+		replayContext.messages.push(
+			secondDone.message,
+			{ role: "toolResult", toolCallId: secondToolCall!.id, toolName: "read", content: secondToolResult.content, details: secondToolResult.details, isError: false, timestamp: 3 },
+		);
+		expect(getDoneEvent(await collectEvents(streamCursor(makeModel(), replayContext, { apiKey: "test-key" }))).reason).toBe("stop");
+	});
+
+	it("applies end-of-run turn-ended usage to the stop turn even when it lands after run.wait resolves", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
+		const registeredTools: RegisteredTool[] = [];
+		await registerNativeToolDisplayForTest(registeredTools);
+
+		let firstOnDelta: CursorDeltaHandler | undefined;
+		let resolveRun: (result: { id: string; status: "finished"; result: string }) => void = () => {};
+		const runWait = vi.fn(
+			() =>
+				new Promise<{ id: string; status: "finished"; result: string }>((resolve) => {
+					resolveRun = resolve;
+				}),
+		);
+		const mockSend = vi.fn().mockImplementation(async (_msg: unknown, opts: { onDelta: CursorDeltaHandler }) => {
+			firstOnDelta = opts.onDelta;
+			opts.onDelta({
+				update: {
+					type: "tool-call-started",
+					toolCall: { name: "task", args: { description: "Inspect campaign pages" } },
+					callId: "task-1",
+				},
+			});
+			opts.onDelta({
+				update: {
+					type: "tool-call-completed",
+					toolCall: {
+						name: "task",
+						args: { description: "Inspect campaign pages" },
+						result: { status: "success", value: { summary: "done" } },
+					},
+					callId: "task-1",
+				},
+			});
+			return asMockCursorRun({
+				id: "run-1",
+				agentId: "agent-1",
+				status: "running",
+				wait: runWait,
+				cancel: vi.fn(),
+				supports: () => true,
+				unsupportedReason: () => undefined,
+			});
+		});
+		mockCreatedAgent({
+			agentId: "agent-1",
+			send: mockSend,
+			[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+		});
+
+		const context = makeContext();
+		context.tools = [{ name: "read", description: "Read files", parameters: Type.Object({}) }];
+
+		const eventsPromise = collectEvents(streamCursor(makeModel(), context, { apiKey: "test-key" }));
+		while (!firstOnDelta) await new Promise((resolve) => setTimeout(resolve, 0));
+		// Race: resolve run.wait FIRST (run.done is set), then fire turn-ended. Without the
+		// finalize reconcile, the stop turn would take usage before it is recorded and fall
+		// back to approximate (cacheRead=0).
+		resolveRun({ id: "run-1", status: "finished", result: "Task complete." });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		firstOnDelta?.({
+			update: {
+				type: "turn-ended",
+				usage: { inputTokens: 31_000, outputTokens: 700, cacheReadTokens: 30_000, cacheWriteTokens: 0 },
+				},
+		});
+		const events = await eventsPromise;
+		const done = getDoneEvent(events);
+
+		expect(done.reason).toBe("stop");
+		expect(done.message.usage).toMatchObject({ input: 31_000, output: 700, cacheRead: 30_000, cacheWrite: 0, totalTokens: 61_700 });
+	});
+
 	it("keeps delayed usage for inactive-only replay and applies it to the emitted final turn", async () => {
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
 		const registeredTools: RegisteredTool[] = [];
