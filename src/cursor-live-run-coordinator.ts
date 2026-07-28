@@ -1,13 +1,5 @@
 import type { Context, ToolResultMessage } from "@earendil-works/pi-ai/compat";
 import type { SDKAgent } from "@cursor/sdk";
-
-const DEFAULT_TURN_ENDED_RECONCILE_MS = 500;
-const TURN_ENDED_RECONCILE_MS_ENV = "PI_CURSOR_TURN_ENDED_WAIT_MS";
-
-function resolveCursorTurnEndedReconcileMs(): number {
-	const raw = Number(process.env[TURN_ENDED_RECONCILE_MS_ENV]);
-	return Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : DEFAULT_TURN_ENDED_RECONCILE_MS;
-}
 import {
 	consumeCursorLiveToolResults,
 	createCursorLiveRunAccountingState,
@@ -23,6 +15,14 @@ import type { CursorPiBridgeToolRequest, CursorPiToolBridgeRun } from "./cursor-
 import { getCursorSessionScopeKey } from "./cursor-session-scope.js";
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
 import { installCursorSdkProcessErrorGuard } from "./cursor-sdk-process-error-guard.js";
+
+const DEFAULT_TURN_ENDED_RECONCILE_MS = 500;
+const TURN_ENDED_RECONCILE_MS_ENV = "PI_CURSOR_TURN_ENDED_WAIT_MS";
+
+function resolveCursorTurnEndedReconcileMs(): number {
+	const raw = Number(process.env[TURN_ENDED_RECONCILE_MS_ENV]);
+	return Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : DEFAULT_TURN_ENDED_RECONCILE_MS;
+}
 
 export class CursorLiveRunAbortError extends Error {
 	constructor() {
