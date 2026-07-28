@@ -14,7 +14,18 @@ export interface CursorUsagePromptOptions extends CursorPromptOptions {
 	imageTokenEstimate: number;
 }
 
+/**
+ * Raw SDK turn-ended usage fields.
+ *
+ * IMPORTANT: the Cursor SDK `turn-ended` event reports `inputTokens` as the total prompt tokens
+ * (regular input + cache read), NOT regular input alone.  `cacheReadTokens` is a separate field
+ * that overlaps with `inputTokens`.  Do NOT sum all four fields for totalTokens — that
+ * double-counts cache read.  Use `inputTokens + outputTokens + cacheWriteTokens` for the
+ * true total (or equivalently split input: `(inputTokens - cacheReadTokens) + outputTokens +
+ * cacheReadTokens + cacheWriteTokens`).
+ */
 export interface CursorSdkTurnUsage {
+	/** Total prompt tokens (regular input + cacheRead).  Does NOT include cacheWriteTokens. */
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;
@@ -85,20 +96,27 @@ export function estimateCursorContextTotalTokens(partial: AssistantMessage, mode
 }
 
 export function isCursorSdkUsageSafeForPiMessage(turnUsage: CursorSdkTurnUsage, model: Model<Api>): boolean {
+	// All SDK fields must be finite and non-negative.
 	const counts = [turnUsage.inputTokens, turnUsage.outputTokens, turnUsage.cacheReadTokens, turnUsage.cacheWriteTokens];
+	// cacheReadTokens is already included in inputTokens (per the CursorSdkTurnUsage contract);
+	// the true total is input + output + cacheWrite (no separate cacheRead add).
+	const trueTotal = turnUsage.inputTokens + turnUsage.outputTokens + turnUsage.cacheWriteTokens;
 	return (
 		counts.every((count) => Number.isFinite(count) && count >= 0) &&
 		turnUsage.outputTokens <= model.maxTokens &&
-		turnUsage.inputTokens + turnUsage.outputTokens + turnUsage.cacheReadTokens + turnUsage.cacheWriteTokens <= model.contextWindow
+		trueTotal <= model.contextWindow
 	);
 }
 
 export function applyCursorSdkUsage(partial: AssistantMessage, turnUsage: CursorSdkTurnUsage): void {
-	partial.usage.input = turnUsage.inputTokens;
+	// SDK inputTokens = regular input + cacheRead (see CursorSdkTurnUsage doc).
+	// Subtract cacheRead to get the actual billed input tokens, then re-sum for the true total.
+	const actualInput = Math.max(0, turnUsage.inputTokens - turnUsage.cacheReadTokens);
+	partial.usage.input = actualInput;
 	partial.usage.output = turnUsage.outputTokens;
 	partial.usage.cacheRead = turnUsage.cacheReadTokens;
 	partial.usage.cacheWrite = turnUsage.cacheWriteTokens;
-	partial.usage.totalTokens = turnUsage.inputTokens + turnUsage.outputTokens + turnUsage.cacheReadTokens + turnUsage.cacheWriteTokens;
+	partial.usage.totalTokens = actualInput + turnUsage.outputTokens + turnUsage.cacheReadTokens + turnUsage.cacheWriteTokens;
 }
 
 export function applyCursorApproximateUsage(partial: AssistantMessage, model: Model<Api>, context: Context, sessionInputTokens: number): void {

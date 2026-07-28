@@ -52,8 +52,9 @@ describe("streamCursor cloud reporting", () => {
 				opts.onDelta({
 					update: {
 						type: "turn-ended",
+						// SDK inputTokens includes cacheRead: 50 = 41 (actual) + 9 (cacheRead).
 						usage: {
-							inputTokens: 7,
+							inputTokens: 50,
 							outputTokens: 8,
 							cacheReadTokens: 9,
 							cacheWriteTokens: 10,
@@ -93,11 +94,12 @@ describe("streamCursor cloud reporting", () => {
 			expect(fetchSpy.mock.calls[0]?.[0].toString()).toContain(`/v1/agents/${CLOUD_AGENT_ID}/usage?runId=run-1`);
 
 			const done = getDoneEvent(events);
-			expect(done.message.usage.input).toBe(7);
+			// SDK inputTokens (50) = actual input (41) + cacheRead (9)
+			expect(done.message.usage.input).toBe(41);
 			expect(done.message.usage.output).toBe(8);
 			expect(done.message.usage.cacheRead).toBe(9);
 			expect(done.message.usage.cacheWrite).toBe(10);
-			expect(done.message.usage.totalTokens).toBe(34);
+			expect(done.message.usage.totalTokens).toBe(41 + 8 + 9 + 10);
 			const doneContent = JSON.stringify(done.message.content);
 			expect(doneContent).not.toContain("Cursor cloud run:");
 			expect(doneContent).not.toContain(CLOUD_AGENT_ID);

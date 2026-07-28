@@ -60,29 +60,33 @@ describe("cursor usage accounting", () => {
 		};
 		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
 
+		// SDK inputTokens = regular input + cacheRead (they overlap).
+		// 25_432 = 1_432 (actual input) + 24_000 (cacheRead).
 		applyCursorUsage(partial, model, context, 7, {
 			turn: { inputTokens: 25_432, outputTokens: 612, cacheReadTokens: 24_000, cacheWriteTokens: 123 },
 		});
 
-		expect(partial.usage.input).toBe(25_432);
+		expect(partial.usage.input).toBe(1_432);
 		expect(partial.usage.output).toBe(612);
 		expect(partial.usage.cacheRead).toBe(24_000);
 		expect(partial.usage.cacheWrite).toBe(123);
-		expect(partial.usage.totalTokens).toBe(25_432 + 612 + 24_000 + 123);
+		expect(partial.usage.totalTokens).toBe(1_432 + 612 + 24_000 + 123);
 	});
 
-	it("rejects SDK usage whose full SDK total would exceed the selected model window", () => {
+	it("rejects SDK usage whose true total would exceed the selected model window", () => {
 		const model = makeModel();
 		const context: Context = {
 			systemPrompt: "Be helpful.",
 			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
 		};
 		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
+		// true total = inputTokens + outputTokens + cacheWriteTokens (cacheRead is inside inputTokens).
+		//  (ctxWin - 5) + 10 + 5 = ctxWin + 10 > ctxWin  →  rejected.
 		const overWindowUsage = {
-			inputTokens: model.contextWindow - 10,
-			outputTokens: 1,
-			cacheReadTokens: 9,
-			cacheWriteTokens: 1,
+			inputTokens: model.contextWindow - 5,
+			outputTokens: 10,
+			cacheReadTokens: 100,
+			cacheWriteTokens: 5,
 		};
 
 		expect(isCursorSdkUsageSafeForPiMessage(overWindowUsage, model)).toBe(false);
@@ -179,11 +183,12 @@ describe("cursor usage accounting", () => {
 		};
 		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
 
+		// SDK inputTokens = actual input (1) + cacheRead (24).
 		applyCursorUsage(partial, model, context, 7, {
 			turn: { inputTokens: 25, outputTokens: 6, cacheReadTokens: 24, cacheWriteTokens: 1 },
 		});
 
-		expect(partial.usage).toMatchObject({ input: 25, output: 6, cacheRead: 24, cacheWrite: 1, totalTokens: 56 });
+		expect(partial.usage).toMatchObject({ input: 1, output: 6, cacheRead: 24, cacheWrite: 1, totalTokens: 32 });
 	});
 
 	it("keeps the prompt/output estimate fallback when SDK usage is absent", () => {
