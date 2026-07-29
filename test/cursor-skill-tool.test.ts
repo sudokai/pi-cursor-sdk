@@ -226,7 +226,11 @@ describe("registerCursorSkillTool", () => {
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
 	});
 
-	it("does not expose the activation tool when no visible skills are available", async () => {
+	it("exposes the activation tool even before skills load, for a stable tool list and prompt caching", async () => {
+		// The tool must be active from the first turn even before skills load: pi
+		// delivers the skill list only in before_agent_start, after the turn's
+		// tool list is assembled. The tool degrades gracefully if invoked before
+		// any skills are available.
 		const pi = createPiHarness({ activeTools: ["read"] });
 		registerCursorSkillTool(pi);
 		await pi.invokeEvent(
@@ -240,6 +244,11 @@ describe("registerCursorSkillTool", () => {
 			{ model: makeModel("composer-2.5"), cwd: "/repo" },
 		);
 
-		expect(pi._activeToolNames()).not.toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		expect(pi._activeToolNames()).toContain(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+
+		const tool = getHarnessRegisteredTool(pi._tools, CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		await expect(
+			tool.execute("call-1", { name: "anything" }, undefined, undefined, createExtensionTestContext({ model: makeModel("composer-2.5"), cwd: "/repo" })),
+		).rejects.toThrow(/Skill not available/);
 	});
 });

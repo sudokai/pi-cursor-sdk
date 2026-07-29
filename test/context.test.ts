@@ -704,6 +704,19 @@ describe("cursor session prompt assembly", () => {
 		expect(incremental.text).toContain(getCursorToolTailGuardText());
 	});
 
+	it("omits the system-instructions block from incremental prompts to preserve prompt caching", () => {
+		// The session agent retains the bootstrapped system instructions in its
+		// accumulated history, so incremental turns omit them: a re-sent block is
+		// appended after the history and is never a prefix-cache hit.
+		const incremental = buildCursorIncrementalPrompt({
+			systemPrompt: "Be helpful. Use the foo tool.",
+			messages: [{ role: "user", content: "Follow up", timestamp: 3 }],
+		});
+		expect(incremental.text).not.toContain("System instructions from pi:");
+		expect(incremental.text).not.toContain("Be helpful. Use the foo tool.");
+		expect(incremental.text).toContain("User: Follow up");
+	});
+
 	it("ends bootstrap and incremental prompts with the tool tail guard", () => {
 		const context: Context = {
 			systemPrompt: "Be helpful.",

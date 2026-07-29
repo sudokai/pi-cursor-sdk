@@ -375,7 +375,14 @@ export function shouldBootstrapCursorSend(
 }
 
 export function buildCursorIncrementalPrompt(context: Context, options: CursorPromptOptions = {}): CursorPrompt {
-	// Incremental sends omit the full Cursor SDK tool boundary block; the session agent retains prior bootstrap context.
+	// Incremental sends carry only the new user turn plus minimal framing. The
+	// session agent keeps the bootstrapped system instructions, tool boundary,
+	// and manifest in its accumulated history, so they are intentionally not
+	// re-sent here (preserving prompt caching): a re-sent block is appended
+	// after that history and is never a prefix-cache hit, so it would be
+	// re-billed on every turn. The bootstrap send and the periodic re-bootstrap
+	// (every 20 incremental sends, and on context divergence / model select /
+	// compaction) refresh the system instructions in history.
 	const messages = normalizePiContextMessages(context.messages);
 	const latestUserMessageIndex = getLatestUserMessageIndex(messages);
 	const latestUserMessage = latestUserMessageIndex >= 0 ? messages[latestUserMessageIndex] : undefined;
@@ -383,9 +390,6 @@ export function buildCursorIncrementalPrompt(context: Context, options: CursorPr
 	const sectionsBeforeMessages = [
 		"Continue the conversation using Cursor SDK capabilities only. Do not list, promise, or call pi-only tools from earlier context as if they were available.",
 	];
-	if (context.systemPrompt) {
-		sectionsBeforeMessages.push(`System instructions from pi:\n${sanitizeSystemPromptForCursor(context.systemPrompt)}`);
-	}
 	const latestUserMessageSections =
 		latestUserText && latestUserMessageIndex >= 0 ? [{ index: latestUserMessageIndex, text: latestUserText }] : [];
 	const images = extractLatestImages(messages);

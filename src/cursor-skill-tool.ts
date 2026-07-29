@@ -67,7 +67,15 @@ function resolveEffectiveRuntimeForSkillLifecycle(
 }
 
 function shouldExposeSkillTool(model: ExtensionContext["model"], runtime: CursorRuntime): boolean {
-	return runtime === "local" && isCursorModel(model) && resolveCursorPiToolBridgeEnabled() && currentSkillsByName.size > 0;
+	// Expose the activation tool whenever Cursor can call it (local runtime,
+	// Cursor model, pi bridge enabled). The tool list must be stable from the
+	// first turn: pi assembles the turn's tool list before before_agent_start,
+	// where the skill list is first delivered, so the gate cannot wait for
+	// skills to load — a tool that flickers in mid-session drifts the system
+	// prompt and forces a full agent re-bootstrap, defeating prompt caching.
+	// execute() returns a clear "no skills available" error if the tool is
+	// invoked before skills load.
+	return runtime === "local" && isCursorModel(model) && resolveCursorPiToolBridgeEnabled();
 }
 
 function syncCursorSkillToolForModel(
