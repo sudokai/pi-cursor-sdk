@@ -277,8 +277,9 @@ async function emitCursorLiveRunPendingToolUseTurn(
 		if (options.mode === "emit") turn.emitter.closeAll();
 		emitCursorNativeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, active, debugRecorder);
 	} else {
-		if (options.mode === "emit") turn.emitter.closeAll();
 		const requests = cursorLiveRuns.collectBridgeToolBatch(run);
+		if (requests.length === 0) return "handled";
+		if (options.mode === "emit") turn.emitter.closeAll();
 		emitCursorBridgeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, requests);
 	}
 	return "tool_use";

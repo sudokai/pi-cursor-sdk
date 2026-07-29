@@ -116,6 +116,7 @@ start target session
   sync checkout once into extensionSourceRoot
   run platform-build
   run cursor-native-visual-matrix
+  run cursor-http1-live
   run cursor-bridge-visual-matrix
   run cursor-abort-cleanup
   run cursor-local-resume-restart
@@ -142,7 +143,7 @@ Runtime budget is part of the contract:
 - `platform-build` runs once per target and is the only suite that performs the full local CI/build/typecheck/package gate.
 - Live suites reuse the target checkout and prepared `node_modules` when run after `platform-build`; they do not repeat `npm ci` in a target-session release run.
 - Live and local-resume suites share one target-local packed-install prep directory per target-session release run. The first such suite runs `npm pack` and `npm install --no-save <tarball>` once. Visual/abort suites install that packed path with `pi install --approve -l`; local-resume lanes pass the same packed package path to their source-tree smoke harness instead of loading the checkout extension.
-- Visual coverage is batched into one native prompt, one bridge prompt, and one abort/cleanup prompt per target. Do not split these into one prompt per card.
+- Visual coverage is batched into one native prompt, one focused HTTP/1.1 transport prompt, one bridge prompt, and one abort/cleanup prompt per target. Do not split the card matrices into one prompt per card.
 - The gate is fail-fast by target to avoid burning Cursor calls after a platform has already failed.
 
 ## Required targets
@@ -298,6 +299,7 @@ export default {
   requiredSuites: [
     "platform-build",
     "cursor-native-visual-matrix",
+    "cursor-http1-live",
     "cursor-bridge-visual-matrix",
     "cursor-abort-cleanup",
     ...LOCAL_RESUME_SUITE_NAMES,
@@ -617,6 +619,32 @@ Required JSONL evidence:
 - final assistant message's last non-empty `text` part contains `NATIVE_MATRIX_OK`;
 - assistant usage fields are non-negative.
 
+### `cursor-http1-live`
+
+Cursor calls: `1`.
+
+Required environment:
+
+```text
+PI_CURSOR_SETTING_SOURCES=none
+PI_CURSOR_HTTP_1_1=1
+PI_CURSOR_NATIVE_TOOL_DISPLAY=1
+PI_CURSOR_REGISTER_NATIVE_TOOLS=1
+PI_CURSOR_PI_TOOL_BRIDGE=0
+PI_CURSOR_EXPOSE_BUILTIN_TOOLS=0
+PI_CURSOR_SDK_EVENT_DEBUG=1
+```
+
+Purpose:
+
+- prove the packed extension completes a real local provider turn through the SDK's opt-in HTTP/1.1/SSE transport on every required OS;
+- prove the final TUI status visibly includes `cursor:local ... http1`;
+- keep the default transport covered by the other required live suites.
+
+Required final marker: `HTTP1_LIVE_OK`.
+
+Required visual evidence: `http1-status`.
+
 ### `cursor-bridge-visual-matrix`
 
 Cursor calls: `1`.
@@ -751,6 +779,7 @@ Per target maximum live Cursor invocations:
 
 ```text
 cursor-native-visual-matrix: 1
+cursor-http1-live: 1
 cursor-bridge-visual-matrix: 1
 cursor-abort-cleanup: 1
 cursor-local-resume-restart: 2
@@ -765,9 +794,9 @@ cursor-local-resume-default-dry-run: 3
 cursor-local-resume-cleanup: 4
 ```
 
-Maximum per target: `36` Cursor invocations.
+Maximum per target: `37` Cursor invocations.
 
-Maximum full gate: `108` Cursor invocations.
+Maximum full gate: `111` Cursor invocations.
 
 The merge gate is `npm run smoke:platform:all`; that script runs doctor first and then the matrix to preserve this budget. No suite adds a new Cursor invocation without updating this plan and the scenario source of truth (`scripts/platform-smoke/scenarios.mjs`, plus `scripts/platform-smoke/local-resume-suites.mjs` for local-resume lanes).
 

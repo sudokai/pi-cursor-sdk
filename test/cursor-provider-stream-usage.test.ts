@@ -91,12 +91,11 @@ describe("streamCursor usage accounting", () => {
 		const events = await collectEvents(stream);
 		const done = getDoneEvent(events);
 
-		// SDK inputTokens (25_432) = actual input (1_432) + cacheRead (24_000)
-		expect(done.message.usage.input).toBe(1_432);
+		expect(done.message.usage.input).toBe(25_432 - 24_000 - 123);
 		expect(done.message.usage.output).toBe(612);
 		expect(done.message.usage.cacheRead).toBe(24_000);
 		expect(done.message.usage.cacheWrite).toBe(123);
-		expect(done.message.usage.totalTokens).toBe(1_432 + 612 + 24_000 + 123);
+		expect(done.message.usage.totalTokens).toBe(25_432 + 612);
 	});
 
 	it("falls back to bounded estimates when SDK turn usage exceeds the model window", async () => {

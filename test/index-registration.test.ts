@@ -4,6 +4,7 @@ import {
 	createExtensionCommandContext,
 	createExtensionRegistrationPi,
 	createExtensionTestContext,
+	createTestToolInfo,
 	makeAssistantMessage,
 	makeContext,
 	makeHarnessModel,
@@ -33,6 +34,7 @@ import { streamCursor } from "../src/cursor-provider.js";
 import { streamCursorLazy } from "../src/cursor-provider-lazy.js";
 import { buildCursorPiToolBridgeSnapshot } from "../src/cursor-pi-tool-bridge.js";
 import {
+	CURSOR_ASK_QUESTION_BLOCKED_EVENT,
 	CURSOR_ASK_QUESTION_ENV,
 	CURSOR_ASK_QUESTION_TOOL_NAME,
 	resolveCursorAskQuestionEnabled,
@@ -188,9 +190,8 @@ describe("extension registration and discovery", () => {
 			"cursor-refresh-config",
 			expect.objectContaining({ description: expect.stringContaining("Refresh filesystem Cursor config") }),
 		);
-		expect(pi.registerTool).toHaveBeenCalledTimes(10);
+		expect(pi.registerTool).toHaveBeenCalledTimes(9);
 		expect(pi._tools.map((tool) => tool.name)).toEqual([
-			CURSOR_ASK_QUESTION_TOOL_NAME,
 			CURSOR_ACTIVATE_SKILL_TOOL_NAME,
 			"grep",
 			"find",
@@ -201,7 +202,6 @@ describe("extension registration and discovery", () => {
 			"edit",
 			"write",
 		]);
-		expect(pi._tools.find((tool) => tool.name === CURSOR_ASK_QUESTION_TOOL_NAME)?.promptSnippet).toContain("clarifying question");
 		expect(pi._tools.find((tool) => tool.name === CURSOR_ACTIVATE_SKILL_TOOL_NAME)?.promptSnippet).toContain("Agent Skill");
 		const replayTool = pi._tools.find((tool) => tool.name === "cursor");
 		expect(replayTool?.promptSnippet).toBeUndefined();
@@ -309,7 +309,7 @@ describe("extension registration and discovery", () => {
 		expect(pi._activeToolNames()).toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
 	});
 
-	it("keeps cursor_ask_question inactive on late-model resync when PI_CURSOR_ASK_QUESTION is unset", async () => {
+	it("does not register cursor_ask_question on late-model resync when PI_CURSOR_ASK_QUESTION is unset", async () => {
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
 		delete process.env.PI_CURSOR_ASK_QUESTION;
 		mockedDiscover.mockResolvedValueOnce([]);
@@ -317,7 +317,7 @@ describe("extension registration and discovery", () => {
 		await extensionFactory(pi);
 		await pi.runSessionStart({ model: undefined });
 
-		expect(pi._tools.map((tool) => tool.name)).toEqual([CURSOR_ASK_QUESTION_TOOL_NAME, CURSOR_ACTIVATE_SKILL_TOOL_NAME]);
+		expect(pi._tools.map((tool) => tool.name)).toEqual([CURSOR_ACTIVATE_SKILL_TOOL_NAME]);
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
 
 		await pi.runBeforeAgentStart({ model: makeModel("composer-2.5") });
@@ -374,7 +374,7 @@ describe("extension registration and discovery", () => {
 		await pi.runBeforeAgentStart({ mode: "print", hasUI: false, model: makeModel("composer-2.5") });
 		await pi.runTurnStart({ mode: "print", hasUI: false, model: makeModel("composer-2.5") });
 
-		expect(pi._tools.map((tool) => tool.name)).toEqual([CURSOR_ASK_QUESTION_TOOL_NAME, CURSOR_ACTIVATE_SKILL_TOOL_NAME]);
+		expect(pi._tools.map((tool) => tool.name)).toEqual([CURSOR_ACTIVATE_SKILL_TOOL_NAME]);
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
 		expect(pi._activeToolNames()).not.toContain("cursor");
 		expect(pi._activeToolNames()).not.toContain("grep");
@@ -405,6 +405,7 @@ describe("extension registration and discovery", () => {
 
 	it("asks Cursor questions through pi UI selection", async () => {
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "0";
+		process.env.PI_CURSOR_ASK_QUESTION = "1";
 		mockedDiscover.mockResolvedValueOnce([]);
 		const pi = createExtensionPi();
 		await extensionFactory(pi);
@@ -436,9 +437,87 @@ describe("extension registration and discovery", () => {
 			cancelled: false,
 			answers: [{ id: "question_1", answer: "Web app", value: "web", cancelled: false }],
 		});
+		expect(pi._eventsEmitted.filter((entry) => entry.channel === CURSOR_ASK_QUESTION_BLOCKED_EVENT)).toEqual([
+			{ channel: CURSOR_ASK_QUESTION_BLOCKED_EVENT, data: { active: true } },
+			{ channel: CURSOR_ASK_QUESTION_BLOCKED_EVENT, data: { active: false } },
+		]);
+		expect(tool!.executionMode).toBe("sequential");
+		const listenerPayloads: unknown[] = [];
+		const unsubscribe = pi.events.on(CURSOR_ASK_QUESTION_BLOCKED_EVENT, (payload) => {
+			listenerPayloads.push(payload);
+		});
+		// Re-run once more to prove createEventBus delivery
+		await tool!.execute(
+			"question-2",
+			{ question: "Again?", options: ["Yes"], allowCustom: false },
+			undefined,
+			undefined,
+			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn().mockResolvedValue({ value: "Yes", labeledValue: "Yes" }), input: vi.fn() } }),
+		);
+		unsubscribe();
+		expect(listenerPayloads).toEqual([{ active: true }, { active: false }]);
 	});
 
-	it("registers cursor_ask_question but leaves it inactive by default", async () => {
+	it("clears pi-cursor-sdk:ask-question:blocked when the Cursor question UI is cancelled", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "0";
+		process.env.PI_CURSOR_ASK_QUESTION = "1";
+		mockedDiscover.mockResolvedValueOnce([]);
+		const pi = createExtensionPi();
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+
+		const select = vi.fn().mockResolvedValue(undefined);
+		const tool = pi._tools.find((candidate) => candidate.name === CURSOR_ASK_QUESTION_TOOL_NAME);
+		const result = await tool!.execute(
+			"question-cancel",
+			{
+				question: "Proceed?",
+				options: ["Yes", "No"],
+				allowCustom: false,
+			},
+			undefined,
+			undefined,
+			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select, input: vi.fn() } }),
+		);
+
+		expect(result.details).toMatchObject({ cancelled: true });
+		expect(pi._eventsEmitted.filter((entry) => entry.channel === CURSOR_ASK_QUESTION_BLOCKED_EVENT)).toEqual([
+			{ channel: CURSOR_ASK_QUESTION_BLOCKED_EVENT, data: { active: true } },
+			{ channel: CURSOR_ASK_QUESTION_BLOCKED_EVENT, data: { active: false } },
+		]);
+	});
+
+	it("clears pi-cursor-sdk:ask-question:blocked when the Cursor question UI rejects", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "0";
+		process.env.PI_CURSOR_ASK_QUESTION = "1";
+		mockedDiscover.mockResolvedValueOnce([]);
+		const pi = createExtensionPi();
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+
+		const select = vi.fn().mockRejectedValue(new Error("UI failed"));
+		const tool = pi._tools.find((candidate) => candidate.name === CURSOR_ASK_QUESTION_TOOL_NAME);
+		await expect(
+			tool!.execute(
+				"question-reject",
+				{
+					question: "Proceed?",
+					options: ["Yes", "No"],
+					allowCustom: false,
+				},
+				undefined,
+				undefined,
+				createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select, input: vi.fn() } }),
+			),
+		).rejects.toThrow("UI failed");
+
+		expect(pi._eventsEmitted.filter((entry) => entry.channel === CURSOR_ASK_QUESTION_BLOCKED_EVENT)).toEqual([
+			{ channel: CURSOR_ASK_QUESTION_BLOCKED_EVENT, data: { active: true } },
+			{ channel: CURSOR_ASK_QUESTION_BLOCKED_EVENT, data: { active: false } },
+		]);
+	});
+
+	it("does not register cursor_ask_question by default (opt-in via PI_CURSOR_ASK_QUESTION=1)", async () => {
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "0";
 		mockedDiscover.mockResolvedValueOnce([]);
 		const pi = createExtensionPi();
@@ -448,7 +527,7 @@ describe("extension registration and discovery", () => {
 
 		expect(cursorPiToolBridgeTestUtils.getRegisteredBridgeForTests()?.isEnabled()).toBe(true);
 		expect(pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
-		expect(pi._tools.map((tool) => tool.name)).toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
+		expect(pi._tools.map((tool) => tool.name)).not.toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
 		expect(pi._activeToolNames()).not.toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
 		expect(buildCursorPiToolBridgeSnapshot(pi).piToolNameToMcpToolName.has(CURSOR_ASK_QUESTION_TOOL_NAME)).toBe(false);
 	});
@@ -476,9 +555,37 @@ describe("extension registration and discovery", () => {
 		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "0" })).toBe(false);
 		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "false" })).toBe(false);
 		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "off" })).toBe(false);
+		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "none" })).toBe(false);
+		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "no" })).toBe(false);
+		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "disabled" })).toBe(false);
 		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "unexpected" })).toBe(false);
 		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "1" })).toBe(true);
 		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "true" })).toBe(true);
+		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "on" })).toBe(true);
+		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "yes" })).toBe(true);
+		expect(resolveCursorAskQuestionEnabled({ PI_CURSOR_ASK_QUESTION: "enabled" })).toBe(true);
+	});
+
+	it("keeps the pi bridge when only the Cursor question tool is disabled with PI_CURSOR_ASK_QUESTION=0", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "0";
+		process.env.PI_CURSOR_ASK_QUESTION = "0";
+		mockedDiscover.mockResolvedValueOnce([]);
+		const bridgeToolName = "sem_reindex";
+		const pi = createExtensionRegistrationPi({
+			initialTools: [createTestToolInfo(bridgeToolName)],
+			activeTools: [bridgeToolName],
+		});
+
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+
+		// The question tool is off (default off + explicit 0) but the pi bridge and its tools remain.
+		expect(cursorPiToolBridgeTestUtils.getRegisteredBridgeForTests()?.isEnabled()).toBe(true);
+		expect(pi._tools.map((tool) => tool.name)).not.toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
+		expect(pi._activeToolNames()).not.toContain(CURSOR_ASK_QUESTION_TOOL_NAME);
+		const snapshot = buildCursorPiToolBridgeSnapshot(pi);
+		expect(snapshot.piToolNameToMcpToolName.has(CURSOR_ASK_QUESTION_TOOL_NAME)).toBe(false);
+		expect(snapshot.piToolNameToMcpToolName.get(bridgeToolName)).toBe(`pi__${bridgeToolName}`);
 	});
 
 	it("honors PI_CURSOR_PI_TOOL_BRIDGE=0 at the extension registration path", async () => {

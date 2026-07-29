@@ -115,6 +115,10 @@ const DECLARATION_TYPE_ONLY_EXPORTS: Record<string, readonly string[]> = {
 		"CursorSdkEventTimingSnapshot",
 		"CursorSdkEventJsonlSink",
 	],
+	"scripts/lib/cloud-smoke-artifacts.d.mts": [
+		"CloudSmokeLifecycleRecord",
+		"CloudSmokeMetadataRecord",
+	],
 	"scripts/lib/cloud-smoke-cleanup-evidence.d.mts": [
 		"CloudSmokeBranchLaneEvidence",
 		"CloudSmokeCancelLaneEvidence",

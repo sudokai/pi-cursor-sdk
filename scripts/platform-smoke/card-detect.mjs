@@ -30,6 +30,7 @@ const CARD_PATTERNS = [
 	},
 	{ id: "bridge-read-failure", pattern: /^\s*(?:read \.\/definitely-missing-platform-smoke-file\.txt|ENOENT: no such file)\s*/i },
 	{ id: "bridge-shell-success", pattern: /^\s*bridge visual smoke\s*$/i },
+	{ id: "http1-status", pattern: /\bcursor:local\b.*\bhttp1\b/i },
 	{ id: "footer-status", pattern: /\bcomposer-2-5\b|\bcomposer-2\.5\b/i },
 ];
 

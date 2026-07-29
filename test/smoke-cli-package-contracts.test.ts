@@ -131,7 +131,9 @@ describe("smoke CLI and package contracts", () => {
 	});
 
 	it("keeps the required paid cloud matrix CLI contract and helper surface", () => {
-		const source = readFileSync("scripts/cloud-runtime-smoke.mjs", "utf8");
+		const entrypointSource = readFileSync("scripts/cloud-runtime-smoke.mjs", "utf8");
+		const runnerSource = readFileSync("scripts/lib/cloud-smoke-pi-runner.mjs", "utf8");
+		const source = `${entrypointSource}\n${runnerSource}`;
 		const help = run(process.execPath, ["scripts/cloud-runtime-smoke.mjs", "--help"]);
 		expect(help.status).toBe(0);
 		expect(help.stdout).toContain("npm run smoke:cloud");
@@ -155,8 +157,10 @@ describe("smoke CLI and package contracts", () => {
 			"projectCloudSmokeMatrixEvidence",
 			"listCloudSmokePackageSourcePaths",
 		]) expect(source, anchor).toContain(anchor);
-		// Helper modules are loaded by the entrypoint; CLI contract stays source-shape only.
+		// Helper modules are loaded by the entrypoint; CLI and child-transport contracts stay source-shape only.
 		expect(source).toContain('from "./lib/cloud-smoke-cleanup-evidence.mjs"');
+		expect(source).toContain('from "./lib/cloud-smoke-artifacts.mjs"');
+		expect(source).toContain('from "./lib/cloud-smoke-pi-runner.mjs"');
 		expect(source).toContain('from "./lib/cloud-smoke-github.mjs"');
 		expect(source).toContain('from "./lib/cloud-smoke-shutdown.mjs"');
 		for (const shutdownAnchor of [
@@ -169,7 +173,8 @@ describe("smoke CLI and package contracts", () => {
 			"throwIfFailed: terminalState.throwIfFailed",
 			"process.exitCode = 1",
 		]) expect(source, shutdownAnchor).toContain(shutdownAnchor);
-		expect(source).toContain('try {\n\t\t\tchild.stdin.write(`${JSON.stringify({ id, type, ...extra })}\\n`);\n\t\t} catch (error) {\n\t\t\trouteRpcError(error);\n\t\t}');
+		expect(source).toContain('child.stdin.write(`${JSON.stringify({ id, type, ...extra })}\\n`);');
+		expect(source).toContain("routeRpcError(error);");
 		expect(source).toContain("installCloudSmokeSignalHandlers(cloudSmokeShutdown, process, () => { process.exitCode = 1; })");
 		expect(source).not.toContain("removeSignalHandlers");
 		expect(source.match(/await checkpointCloudSmokeShutdown\(cloudSmokeShutdown\)/g)).toHaveLength(3);

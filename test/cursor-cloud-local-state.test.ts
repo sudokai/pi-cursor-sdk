@@ -16,13 +16,31 @@ import { initTrackedGitRepo as initTrackedRepo, runGit as git } from "./helpers/
 
 describe("Cursor cloud local state", () => {
 	let root: string;
+	let cleanHome: string;
+	let cleanXdgConfigHome: string;
+	let previousHome: string | undefined;
+	let previousXdgConfigHome: string | undefined;
 
 	beforeEach(() => {
 		root = mkdtempSync(join(tmpdir(), "pi-cursor-cloud-local-state-"));
+		// Ambient git probes read HOME/.gitconfig and $XDG_CONFIG_HOME/git/config.
+		// Isolate every case from host url.*.insteadof rewrites.
+		cleanHome = mkdtempSync(join(tmpdir(), "pi-cursor-cloud-local-state-home-"));
+		cleanXdgConfigHome = mkdtempSync(join(tmpdir(), "pi-cursor-cloud-local-state-xdg-"));
+		previousHome = process.env.HOME;
+		previousXdgConfigHome = process.env.XDG_CONFIG_HOME;
+		process.env.HOME = cleanHome;
+		process.env.XDG_CONFIG_HOME = cleanXdgConfigHome;
 	});
 
 	afterEach(() => {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+		else process.env.XDG_CONFIG_HOME = previousXdgConfigHome;
 		rmSync(root, { recursive: true, force: true });
+		rmSync(cleanHome, { recursive: true, force: true });
+		rmSync(cleanXdgConfigHome, { recursive: true, force: true });
 	});
 
 	it("scrubs Git child environment names case-insensitively and installs canonical null config", () => {

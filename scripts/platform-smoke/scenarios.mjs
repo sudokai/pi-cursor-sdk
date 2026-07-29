@@ -96,6 +96,23 @@ NATIVE_MATRIX_OK package=<name> grep=<yes/no> find=<yes/no> list=<yes/no> shell=
 		],
 	},
 
+	"cursor-http1-live": {
+		description: "Prove an opt-in HTTP/1.1/SSE local provider turn and visible transport status.",
+		cursorCalls: 1,
+		env: {
+			PI_CURSOR_SETTING_SOURCES: "none",
+			PI_CURSOR_HTTP_1_1: "1",
+			PI_CURSOR_NATIVE_TOOL_DISPLAY: "1",
+			PI_CURSOR_REGISTER_NATIVE_TOOLS: "1",
+			PI_CURSOR_PI_TOOL_BRIDGE: "0",
+			PI_CURSOR_EXPOSE_BUILTIN_TOOLS: "0",
+			PI_CURSOR_SDK_EVENT_DEBUG: "1",
+		},
+		promptTemplate: "Reply exactly HTTP1_LIVE_OK.",
+		finalMarker: "HTTP1_LIVE_OK",
+		requiredCards: ["http1-status"],
+	},
+
 	"cursor-bridge-visual-matrix": {
 		description: "Prove pi bridge routing, bridge tool cards, diagnostics, real pi tool names.",
 		cursorCalls: 1,

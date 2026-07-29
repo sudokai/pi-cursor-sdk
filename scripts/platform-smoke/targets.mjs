@@ -119,6 +119,7 @@ export async function runTargetSuite(config, targetName, suiteName, leaseSession
 		case "platform-build":
 			return await executePlatformBuild(config, targetName, suiteDir, slug, platform, leaseSession);
 		case "cursor-native-visual-matrix":
+		case "cursor-http1-live":
 		case "cursor-bridge-visual-matrix":
 		case "cursor-abort-cleanup":
 			return await executeLiveSuite(config, targetName, suiteName, suiteDir, slug, leaseSession);

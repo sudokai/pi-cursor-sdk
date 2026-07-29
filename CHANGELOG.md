@@ -1,16 +1,51 @@
 # Changelog
 
-## Unreleased
+## 0.1.62 - 2026-07-28
 
 ### Added
 
-- Add strictly opt-in Cursor Cloud pull-request controls: `--cursor-cloud-auto-create-pr` / `PI_CURSOR_CLOUD_AUTO_CREATE_PR` / `cloud.autoCreatePR` and `--cursor-cloud-skip-reviewer-request` / `PI_CURSOR_CLOUD_SKIP_REVIEWER_REQUEST` / `cloud.skipReviewerRequest`. Unset controls remain omitted from SDK options, project config is excluded, and local runtime behavior is unchanged.
-- Add strictly opt-in local-agent HTTP/1.1/SSE compatibility through `PI_CURSOR_HTTP_1_1`, `/cursor-http [on|off|toggle]`, and user `cursor-sdk.json` `local.useHttp1ForAgent`, resolved as session > environment > user > unset. Explicit values configure the Cursor SDK before local agent creation, session shutdown clears extension-owned SDK transport state before module reload, transport choices split the pooled agent key, and enabled local status shows `http1`; cloud and unset/default behavior remain unchanged. The pool-key shape change makes pre-upgrade local resume handles rebootstrap once; superseded handles remain eligible for explicit `/cursor-local-resume-cleanup`.
+- Emit `pi-cursor-sdk:ask-question:blocked` (`{ active: boolean }`) while `cursor_ask_question` awaits pi UI input, and clear it in `finally`. Consumers (e.g. Herdr) can subscribe and map it to blocked/working; listening is out of scope for this package.
+- Record each distinct local Cursor agent whose send is initiated once per native pi session in a non-resumable `cursor-sdk-agent-lineage` custom entry, including failed/cancelled runs and when local resume is disabled.
+
+### Fixed
+
+- Suppress Cursor SDK `DOMException [AbortError]` while any provider turn or session guard is active (stall detector / inter-turn timers), and treat installed SDK `RetriableError: Connection stalled repeatedly` as a retryable network failure (#194, #197).
+- Map Cursor SDK prompt usage into pi-additive components (`input = inputTokens - cacheRead - cacheWrite`) with `totalTokens = inputTokens + outputTokens`, reject invalid cache partitions, and floor approximate occupancy at the last accepted assistant measurement (#196).
+- Omit invariant Pi system instructions from incremental local Cursor prompts; bootstrap/rebootstrap still send the current system section, and system-prompt changes still force context-divergence bootstrap (#192).
+- Capture `pi --list-models cursor` fully before searching for `composer-2.5` in `smoke:live`, so large catalogs no longer SIGPIPE the prereq under `pipefail`.
+- Isolate ambient Git `HOME` and `XDG_CONFIG_HOME` in cloud local-state tests so host `url.*.insteadof` rewrites cannot poison remote-identity probes.
 
 ### Changed
 
-- Default `cursor_ask_question` / `pi__cursor_ask_question` off; opt in with `PI_CURSOR_ASK_QUESTION=1` (tool remains registered, inactive and unbridged until enabled).
+- Tighten Cursor Cloud AGENTS.md setup notes: durable Node/PATH/smoke prerequisites only; Linux-only checks are partial evidence and do not replace `smoke:platform:all`.
+
+## 0.1.61 - 2026-07-22
+
+### Added
+
+- Add `PI_CURSOR_ASK_QUESTION` to toggle `cursor_ask_question` independently of the pi tool bridge.
+- Add strictly opt-in Cursor Cloud pull-request controls: `--cursor-cloud-auto-create-pr` / `PI_CURSOR_CLOUD_AUTO_CREATE_PR` / `cloud.autoCreatePR` and `--cursor-cloud-skip-reviewer-request` / `PI_CURSOR_CLOUD_SKIP_REVIEWER_REQUEST` / `cloud.skipReviewerRequest`. Unset controls remain omitted from SDK options, project config is excluded, and local runtime behavior is unchanged.
+- Add strictly opt-in local-agent HTTP/1.1/SSE compatibility through `PI_CURSOR_HTTP_1_1`, `/cursor-http [on|off|toggle]`, and user `cursor-sdk.json` `local.useHttp1ForAgent`, resolved as session > environment > user > unset. Explicit values configure the Cursor SDK before local agent creation, session shutdown clears extension-owned SDK transport state before module reload, transport choices split the pooled agent key, and enabled local status shows `http1`; cloud and unset/default behavior remain unchanged. The pool-key shape change makes pre-upgrade local resume handles rebootstrap once; superseded handles remain eligible for explicit `/cursor-local-resume-cleanup`.
+
+### Fixed
+
+- Give each persisted pi session its own Cursor SDK SQLite store under the workspace SDK state root and thread that exact store through local create/resume, message reads, checkpoint lookup, delete, and explicit cleanup paths, preventing parallel pi sessions from contending on one workspace `index.db`. Fileless acquisitions use unique OS-temporary stores with guarded graceful removal and start a fresh agent after in-process invalidation instead of reopening a disposed temporary store. Resume entries now version their store identity; legacy entries keep the default workspace store for resume and migrate to the per-session store after fallback or replacement. Older extension versions ignore the new version-2 resume entries after a downgrade.
+- Initialize `CURSOR_RIPGREP_PATH` from the installed Cursor SDK platform package before local agent creation, including nested npm dependency layouts, so Cursor-native Grep/Glob can use the bundled executable.
+- Bound pending pi bridge `CallTool` waits to the effective MCP tool timeout, with a lower-only `PI_CURSOR_PI_BRIDGE_CALL_TIMEOUT_MS` override; expiry and cancellation remove stale calls and abort active pi execution when available.
+- Fail closed before Cursor Cloud agent creation when an explicit repository/ref cannot be matched to one unambiguous local remote-tracking target, when local state is dirty/unpushed/unverifiable, or when Git metadata, URL rewriting, refspec ownership, replacement/graft ancestry, sparse-index state, or ambient Git redirection makes the target uncertain. `--cursor-cloud-allow-local-state` remains the explicit override.
+- Require project-trust provenance from Pi's `project_trust` event or explicit `--approve` before reading or writing `.pi/cursor-sdk.json`; project-local package installs loaded after trust resolution must use `--approve`, and concurrent config writers preserve unrecognized fields through a serialized read-modify-write update.
+- Preserve scrubbed Cursor Cloud authentication and GitHub integration remediation without exposing credentials, URL userinfo, bearer values, or unsafe help URLs.
+- Suppress raw Cursor SDK `AbortError` DOMException/Error process failures only while an active provider turn has declared abort suppression and the stack has Cursor SDK provenance; inactive, undeclared, and non-Cursor abort errors remain visible.
+
+### Changed
+
+- Default `cursor_ask_question` / `pi__cursor_ask_question` off in this fork; opt in with `PI_CURSOR_ASK_QUESTION=1`. The tool is unregistered and unbridged until enabled, leaving the rest of the pi bridge available.
 - Expand the maintainer-only `npm run smoke:cloud` release gate to create, seed, and delete a private UUID-named GitHub repository while proving cancel, starting-ref branch, direct-push, missing-branch, lifecycle-delete, exact agent cleanup, and authenticated repository-deletion contracts. Add fail-closed `SIGINT`/`SIGTERM` handling, including a real event-loop checkpoint before the atomic evidence commit and handlers retained through process teardown, plus account-conditional artifact/raw-usage observations. The gate now requires `gh` authorization to create/push/delete private repositories; product runtime behavior and defaults are unchanged.
+- Add a required packed-install `cursor-http1-live` platform lane on macOS, Ubuntu, and native Windows that completes a real HTTP/1.1/SSE local provider turn and asserts the visible `http1` status.
+
+### Security
+
+- Refresh lock-resolved `hono`, `fast-uri`, and `body-parser` to patched versions. `npm audit --omit=dev` still reports five vulnerable package entries covering ten public transitive advisories: the pinned Cursor SDK's ConnectRPC path has no compatible fixed `undici` release, while the MCP SDK's remaining Hono `serve-static` advisory is fixed only in a major `@hono/node-server` version outside the SDK's declared range and is not exercised by this extension's loopback `StreamableHTTPServerTransport`; no compatible non-breaking upstream update is currently available for those remaining paths.
 
 ## 0.1.60 - 2026-07-17
 

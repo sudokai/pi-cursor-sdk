@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 import { CURSOR_TOOL_PRESENTATION_SPECS } from "../src/cursor-tool-presentation-registry.js";
+import { getScenario } from "../scripts/platform-smoke/scenarios.mjs";
 
 function run(command: string, args: string[], env = process.env, cwd = process.cwd()) {
 	return spawnSync(command, args, { cwd, encoding: "utf8", env, shell: process.platform === "win32" && command === "npm" });
@@ -192,6 +193,16 @@ try {
 		}
 	});
 
+	it("keeps the required HTTP/1.1 live lane explicit", () => {
+		const scenario = getScenario("cursor-http1-live");
+		expect(scenario).toMatchObject({
+			cursorCalls: 1,
+			finalMarker: "HTTP1_LIVE_OK",
+			requiredCards: ["http1-status"],
+			env: { PI_CURSOR_HTTP_1_1: "1", PI_CURSOR_PI_TOOL_BRIDGE: "0", PI_CURSOR_SDK_EVENT_DEBUG: "1" },
+		});
+	});
+
 	it("rejects invalid platform smoke targets and suites before Crabbox runs", () => {
 		const invalidTarget = run(process.execPath, ["scripts/platform-smoke.mjs", "run", "--target", "plan9"]);
 		expect(invalidTarget.status).toBe(2);
@@ -209,10 +220,10 @@ try {
 import { detectCards, assertRequiredCards } from "./scripts/platform-smoke/card-detect.mjs";
 import { isSafeBundlePath } from "./scripts/platform-smoke/targets.mjs";
 const promptOnly = detectCards("1. call pi__read on ./package.json\n2. grep ./README.md\n");
-const rendered = detectCards("read /workspace/pi-cursor-sdk/package.json\ngrep /pi-cursor-sdk/ in C:/workspace/README.md\nbridge visual smoke\nENOENT: no such file or directory\ncomposer-2-5\n");
+const rendered = detectCards("read /workspace/pi-cursor-sdk/package.json\ngrep /pi-cursor-sdk/ in C:/workspace/README.md\nbridge visual smoke\nENOENT: no such file or directory\ncursor:local · fast:off · http1\ncomposer-2-5\n");
 const wrapped = detectCards("read /workspace/very-long-test-workspace/package.js\non\n");
 const wrappedMidToken = detectCards("read /workspace/very-long-test-workspace/package.j\nson\n");
-const checks = assertRequiredCards(".", rendered, ["bridge-read-success", "grep", "bridge-shell-success", "bridge-read-failure", "footer-status"]);
+const checks = assertRequiredCards(".", rendered, ["bridge-read-success", "grep", "bridge-shell-success", "bridge-read-failure", "http1-status", "footer-status"]);
 const wrappedChecks = assertRequiredCards(".", wrapped, ["bridge-read-success"]);
 const wrappedMidTokenChecks = assertRequiredCards(".", wrappedMidToken, ["bridge-read-success"]);
 const result = {

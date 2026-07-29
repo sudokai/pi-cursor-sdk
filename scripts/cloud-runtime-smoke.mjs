@@ -1,33 +1,20 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import {
-	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	readFileSync,
-	readdirSync,
 	renameSync,
 	rmSync,
-	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import {
-	CHILD_PROCESS_TREE_SPAWN_OPTIONS,
-	terminateChild,
-} from "./lib/cursor-child-process.mjs";
+import { terminateChild } from "./lib/cursor-child-process.mjs";
 import { buildCursorSmokeEnv } from "./lib/cursor-smoke-env.mjs";
 import {
-	awaitCloudSmokeShutdown,
 	checkpointCloudSmokeShutdown,
 	createCloudSmokeShutdownController,
-	createCloudSmokeTerminalFailureState,
-	installCloudSmokeChildErrorHandlers,
 	installCloudSmokeSignalHandlers,
-	routeCloudSmokeChildClose,
-	stopCloudSmokeTrackedChild,
 } from "./lib/cloud-smoke-shutdown.mjs";
 import {
 	assertAgentDeleted,
@@ -49,11 +36,16 @@ import {
 	runTimedCommand,
 	validatePrUrl,
 } from "./lib/cloud-smoke-github.mjs";
+import { CLOUD_AGENT_ID_PATTERN } from "../shared/cursor-cloud-lifecycle-constants.mjs";
 import {
-	CLOUD_AGENT_ID_PATTERN,
-	CLOUD_LIFECYCLE_ENTRY_TYPE,
-	CLOUD_LIFECYCLE_JOURNAL_PREFIX,
-} from "../shared/cursor-cloud-lifecycle-constants.mjs";
+	cloudAgentIdsFromLifecycleArtifacts,
+	cloudAgentIdsFromMetadata,
+	cloudLifecycleRecords,
+	readCloudRunReport,
+	readCloudSmokeMetadata,
+	readLatestCloudSmokeMetadata,
+} from "./lib/cloud-smoke-artifacts.mjs";
+import { createCloudSmokePiRunner } from "./lib/cloud-smoke-pi-runner.mjs";
 import { scrubSensitiveText } from "../shared/cursor-sensitive-text.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -141,11 +133,6 @@ function reportFailure(error) {
 	else if (error?.details) console.error(scrubSmokeText(error.details));
 }
 
-function findPiBin() {
-	const local = join(root, "node_modules", ".bin", process.platform === "win32" ? "pi.cmd" : "pi");
-	return existsSync(local) ? local : process.platform === "win32" ? "pi.cmd" : "pi";
-}
-
 function optionalSmokeValue(name) {
 	const value = process.env[name]?.trim();
 	return value || undefined;
@@ -185,6 +172,7 @@ export {
 	assertOwnedThrowawayRepositoryHandle,
 	buildCloudSmokeEvidenceProvenance,
 	cloudSmokeRepositoryDescription,
+	cloudAgentIdsFromLifecycleArtifacts,
 	coordinateCloudSmokeReleaseGate,
 	listCloudSmokePackageSourcePaths,
 	normalizeCloudSmokeGitHubRepo,
@@ -192,85 +180,13 @@ export {
 	validateCloudSmokeMatrixEvidence,
 };
 
-function runPi({ artifactDir, envOptions = {}, message, sessionId, timeoutMs }) {
-	cloudSmokeShutdown.throwIfRequested();
-	const sessionDir = join(artifactDir, "sessions");
-	mkdirSync(sessionDir, { recursive: true });
-	const child = spawn(
-		findPiBin(),
-		["-e", root, "--model", MODEL, "--approve", "--session-dir", sessionDir, "--session-id", sessionId, "-p", message],
-		{
-			cwd: buildCloudSmokeWorkspace(artifactDir),
-			env: buildCloudSmokeEnv(artifactDir, envOptions),
-			stdio: ["ignore", "pipe", "pipe"],
-			...CHILD_PROCESS_TREE_SPAWN_OPTIONS,
-		},
-	);
-	const tracking = cloudSmokeShutdown.track(child);
-	let stdout = "";
-	let stderr = "";
-	child.stdout.setEncoding("utf8");
-	child.stderr.setEncoding("utf8");
-	child.stdout.on("data", (chunk) => { stdout += chunk; });
-	child.stderr.on("data", (chunk) => { stderr += chunk; });
-	return new Promise((resolveRun, rejectRun) => {
-		let settled = false;
-		let timeoutStarted = false;
-		let timeoutTermination = Promise.resolve();
-		const settle = (callback, value) => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			cloudSmokeShutdown.signal.removeEventListener("abort", onShutdown);
-			callback(value);
-		};
-		const onShutdown = () => {
-			const termination = Promise.allSettled([tracking, timeoutTermination]).then((results) => {
-				const failed = results.find((result) => result.status === "rejected");
-				if (failed) throw failed.reason;
-			});
-			void awaitCloudSmokeShutdown(cloudSmokeShutdown, termination).then((error) => settle(rejectRun, error));
-		};
-		const timer = setTimeout(() => {
-			if (cloudSmokeShutdown.signal.aborted) {
-				onShutdown();
-				return;
-			}
-			timeoutStarted = true;
-			timeoutTermination = terminateChild(child);
-			void timeoutTermination.then(
-				() => {
-					if (cloudSmokeShutdown.signal.aborted) onShutdown();
-					else settle(rejectRun, new Error(`pi cloud smoke timed out after ${timeoutMs}ms`));
-				},
-				(error) => {
-					if (cloudSmokeShutdown.signal.aborted) onShutdown();
-					else settle(rejectRun, new Error(`pi cloud smoke timed out and cleanup failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error }));
-				},
-			);
-		}, timeoutMs);
-		cloudSmokeShutdown.signal.addEventListener("abort", onShutdown, { once: true });
-		if (cloudSmokeShutdown.signal.aborted) onShutdown();
-		void tracking.catch((error) => {
-			if (cloudSmokeShutdown.signal.aborted) onShutdown();
-			else settle(rejectRun, error);
-		});
-		child.once("error", (error) => routeCloudSmokeChildClose(
-			cloudSmokeShutdown,
-			timeoutStarted,
-			onShutdown,
-			(failure) => settle(rejectRun, failure),
-			error,
-		));
-		child.once("close", (code, signal) => routeCloudSmokeChildClose(
-			cloudSmokeShutdown,
-			timeoutStarted,
-			onShutdown,
-			(result) => settle(resolveRun, result),
-			{ code, signal, stdout, stderr },
-		));
-	});
-}
+const { runPi, startRpc } = createCloudSmokePiRunner({
+	root,
+	model: MODEL,
+	shutdown: cloudSmokeShutdown,
+	buildEnv: buildCloudSmokeEnv,
+	buildWorkspace: buildCloudSmokeWorkspace,
+});
 
 function command(commandName, commandArgs, options = {}) {
 	try {
@@ -280,106 +196,11 @@ function command(commandName, commandArgs, options = {}) {
 	}
 }
 
-function walkFiles(dir, predicate) {
-	const files = [];
-	const stack = [dir];
-	while (stack.length > 0) {
-		const current = stack.pop();
-		try {
-			for (const entry of readdirSync(current, { withFileTypes: true })) {
-				const path = join(current, entry.name);
-				if (entry.isDirectory()) stack.push(path);
-				else if (predicate(entry.name)) files.push(path);
-			}
-		} catch {}
-	}
-	return files.sort((left, right) => statSync(left).mtimeMs - statSync(right).mtimeMs);
-}
-
-function metadataFiles(dir) {
-	return walkFiles(dir, (name) => name === "metadata.json");
-}
-
-function readMetadata(artifactDir) {
-	return metadataFiles(artifactDir).flatMap((metadataPath) => {
-		try {
-			return [{ metadataPath, metadata: JSON.parse(readFileSync(metadataPath, "utf8")) }];
-		} catch {
-			return [];
-		}
-	});
-}
-
-function readLatestMetadataIfPresent(artifactDir) {
-	return readMetadata(artifactDir).at(-1);
-}
-
-function addExactCloudAgentId(ids, value) {
-	if (typeof value === "string" && CLOUD_AGENT_ID_PATTERN.test(value)) ids.add(value);
-}
-
-function cloudAgentIdsFromMetadata(artifactDir) {
-	const ids = new Set();
-	for (const { metadata } of readMetadata(artifactDir)) {
-		addExactCloudAgentId(ids, metadata.run?.agentId ?? metadata.providerMeta?.cloudAgentId);
-	}
-	return [...ids];
-}
-
-function lifecycleArtifactFiles(dir) {
-	return walkFiles(dir, (name) => name.endsWith(".jsonl") || (name.startsWith(`${CLOUD_LIFECYCLE_JOURNAL_PREFIX}-`) && name.endsWith(".journal")));
-}
-
-function cloudLifecycleRecords(artifactDir) {
-	const records = [];
-	for (const path of lifecycleArtifactFiles(artifactDir)) {
-		const journal = path.split(/[\\/]/).at(-1)?.startsWith(`${CLOUD_LIFECYCLE_JOURNAL_PREFIX}-`) === true;
-		let lines;
-		try {
-			lines = readFileSync(path, "utf8").split(/\r?\n/);
-		} catch {
-			continue;
-		}
-		for (const line of lines) {
-			if (!line) continue;
-			try {
-				const entry = JSON.parse(line);
-				const data = journal
-					? entry
-					: entry?.type === "custom" && entry.customType === CLOUD_LIFECYCLE_ENTRY_TYPE
-						? entry.data
-						: undefined;
-				if (data && CLOUD_AGENT_ID_PATTERN.test(data.agentId)) records.push({ path, data });
-			} catch {}
-		}
-	}
-	return records;
-}
-
-export function cloudAgentIdsFromLifecycleArtifacts(artifactDir) {
-	return [...new Set(cloudLifecycleRecords(artifactDir).map(({ data }) => data.agentId))];
-}
-
-function resolveMetadataArtifactPath(metadataPath, artifactPath) {
-	if (!artifactPath) return undefined;
-	return resolve(artifactPath) === artifactPath ? artifactPath : join(dirname(metadataPath), artifactPath);
-}
-
-function readJsonlIfPresent(path) {
-	if (!path || !existsSync(path)) return [];
-	return readFileSync(path, "utf8").split(/\n+/).filter(Boolean).map((line) => JSON.parse(line));
-}
-
-function cloudReport({ metadataPath, metadata }) {
-	const providerEventsPath = resolveMetadataArtifactPath(metadataPath, metadata.artifacts?.providerEvents);
-	return readJsonlIfPresent(providerEventsPath).find((event) => event.phase === "cloud_run_report")?.payload;
-}
-
 async function runSuccessfulPrintLane({ artifactDir, envOptions, message, marker, sessionId, timeoutMs }) {
 	const run = await runPi({ artifactDir, envOptions, message, sessionId, timeoutMs });
 	if (run.code !== 0) fail(`pi cloud lane exited ${run.code}${run.signal ? ` (${run.signal})` : ""}`, `${run.stderr}\n${run.stdout}`.trim());
 	if (!run.stdout.includes(marker)) fail(`cloud lane output missing ${marker}`, `${run.stderr}\n${run.stdout}`.trim());
-	const latest = readLatestMetadataIfPresent(artifactDir);
+	const latest = readLatestCloudSmokeMetadata(artifactDir);
 	if (!latest) fail("cloud lane metadata missing", artifactDir);
 	const report = assertCloudMetadata(latest.metadata, latest.metadataPath);
 	const agentId = latest.metadata.run.agentId;
@@ -395,7 +216,7 @@ function assertCloudMetadata(metadata, metadataPath, options = {}) {
 	if (metadata.send?.agentMode !== "agent") fail("cloud send did not use agent mode", metadataPath);
 	if (!CLOUD_AGENT_ID_PATTERN.test(metadata.run?.agentId ?? "")) fail("cloud run did not return an exact cloud agent id", metadataPath);
 	if (!CLOUD_RUN_ID_PATTERN.test(metadata.run?.runId ?? "")) fail("cloud run did not return an exact run id", metadataPath);
-	const report = cloudReport({ metadataPath, metadata });
+	const report = readCloudRunReport({ metadataPath, metadata });
 	if (!report && options.requireReport === false) return undefined;
 	if (!report) fail("cloud report was not retained after the print-mode lane exited", metadataPath);
 	if (report.agentId !== metadata.run.agentId || report.runId !== metadata.run.runId) fail("cloud report IDs did not match run metadata", metadataPath);
@@ -427,129 +248,6 @@ function assertLaneEvidence(artifactDir, expectedAgentId, expectedRunId) {
 	if (expectedRunId && !lifecycle.some(({ data }) => data.agentId === expectedAgentId && data.runId === expectedRunId)) {
 		fail("lane run ID missing from canonical lifecycle JSONL/journal", expectedRunId);
 	}
-}
-
-async function startRpc({ artifactDir, contextHandoff = "fresh", sessionId, envOptions = {} }) {
-	cloudSmokeShutdown.throwIfRequested();
-	const sessionDir = join(artifactDir, "sessions");
-	mkdirSync(sessionDir, { recursive: true });
-	const child = spawn(
-		findPiBin(),
-		["--mode", "rpc", "-e", root, "--model", MODEL, "--approve", "--session-dir", sessionDir, "--session-id", sessionId],
-		{
-			cwd: buildCloudSmokeWorkspace(artifactDir),
-			env: buildCloudSmokeEnv(artifactDir, { contextHandoff, ...envOptions }),
-			stdio: ["pipe", "pipe", "pipe"],
-			...CHILD_PROCESS_TREE_SPAWN_OPTIONS,
-		},
-	);
-	const tracking = cloudSmokeShutdown.track(child);
-	let stderr = "";
-	const events = [];
-	const pending = new Map();
-	let requestId = 0;
-	let stdoutBuffer = "";
-	child.stdout.setEncoding("utf8");
-	child.stderr.setEncoding("utf8");
-	child.stderr.on("data", (chunk) => { stderr += chunk; });
-	child.stdout.on("data", (chunk) => {
-		stdoutBuffer += chunk;
-		let newlineIndex;
-		while ((newlineIndex = stdoutBuffer.indexOf("\n")) >= 0) {
-			const line = stdoutBuffer.slice(0, newlineIndex);
-			stdoutBuffer = stdoutBuffer.slice(newlineIndex + 1);
-			if (!line.trim()) continue;
-			let message;
-			try { message = JSON.parse(line); } catch { continue; }
-			if (message.type === "response" && pending.has(message.id)) {
-				if (cloudSmokeShutdown.signal.aborted) {
-					rejectAfterShutdown();
-					continue;
-				}
-				const request = pending.get(message.id);
-				pending.delete(message.id);
-				clearTimeout(request.timer);
-				request.resolve(message);
-			} else events.push(message);
-		}
-	});
-	const rejectPending = (error) => {
-		for (const request of pending.values()) {
-			clearTimeout(request.timer);
-			request.reject(error);
-		}
-		pending.clear();
-	};
-	const terminalState = createCloudSmokeTerminalFailureState(rejectPending);
-	const rejectAfterShutdown = () => {
-		void awaitCloudSmokeShutdown(cloudSmokeShutdown, tracking).then(rejectPending);
-	};
-	cloudSmokeShutdown.signal.addEventListener("abort", rejectAfterShutdown, { once: true });
-	if (cloudSmokeShutdown.signal.aborted) rejectAfterShutdown();
-	const routeRpcError = installCloudSmokeChildErrorHandlers(
-		child,
-		cloudSmokeShutdown,
-		rejectAfterShutdown,
-		terminalState.record,
-	);
-	child.once("close", () => {
-		cloudSmokeShutdown.signal.removeEventListener("abort", rejectAfterShutdown);
-		if (cloudSmokeShutdown.signal.aborted) rejectAfterShutdown();
-		else terminalState.record(new Error(`cloud smoke RPC exited. Stderr: ${stderr}`));
-	});
-	const send = (type, extra = {}, timeoutMs = 120000) => new Promise((resolveRequest, rejectRequest) => {
-		try {
-			cloudSmokeShutdown.throwIfRequested();
-			terminalState.throwIfFailed();
-		} catch (error) {
-			rejectRequest(error);
-			return;
-		}
-		const id = `cloud_smoke_${++requestId}`;
-		const timer = setTimeout(() => {
-			if (cloudSmokeShutdown.signal.aborted) {
-				rejectAfterShutdown();
-				return;
-			}
-			pending.delete(id);
-			rejectRequest(new Error(`timeout waiting for ${type}. Stderr: ${stderr}`));
-		}, timeoutMs);
-		pending.set(id, { resolve: resolveRequest, reject: rejectRequest, timer });
-		try {
-			child.stdin.write(`${JSON.stringify({ id, type, ...extra })}\n`);
-		} catch (error) {
-			routeRpcError(error);
-		}
-	});
-	const stop = async () => {
-		cloudSmokeShutdown.signal.removeEventListener("abort", rejectAfterShutdown);
-		if (!cloudSmokeShutdown.signal.aborted) terminalState.record(new Error("cloud smoke RPC stopped"));
-		try {
-			const shutdownReason = await stopCloudSmokeTrackedChild(
-				cloudSmokeShutdown,
-				tracking,
-				() => terminateChild(child, { graceMs: 15_000 }),
-			);
-			if (shutdownReason) rejectPending(shutdownReason);
-		} catch (error) {
-			rejectPending(error);
-			throw error;
-		}
-	};
-	try {
-		await tracking;
-		if (cloudSmokeShutdown.signal.aborted) throw await awaitCloudSmokeShutdown(cloudSmokeShutdown, tracking);
-	} catch (error) {
-		rejectPending(error);
-		throw error;
-	}
-	return {
-		events,
-		send,
-		stop,
-		throwIfFailed: terminalState.throwIfFailed,
-		get stderr() { return stderr; },
-	};
 }
 
 async function waitFor(predicate, timeoutMs, errorMessage) {
@@ -586,7 +284,7 @@ async function promptAndRead({ rpc, artifactDir, message, timeoutMs, expectedCon
 	if (!response.success) fail("cloud prompt was rejected", response.error);
 	await waitForAgentSettled(rpc, fromIndex, timeoutMs);
 	const text = await readLastAssistantText(rpc);
-	const latest = readLatestMetadataIfPresent(artifactDir);
+	const latest = readLatestCloudSmokeMetadata(artifactDir);
 	if (!latest) fail("cloud smoke metadata missing", artifactDir);
 	const report = assertCloudMetadata(latest.metadata, latest.metadataPath, { requireReport: !expectedContextHandoff });
 	if (expectedContextHandoff && latest.metadata.providerMeta?.contextHandoff !== expectedContextHandoff) {
@@ -726,7 +424,7 @@ async function runCancelLane({ artifactRoot, repo, timeoutMs, Agent }) {
 		let nextRunProbeAt = 0;
 		const identity = await waitFor(async () => {
 			rpc.throwIfFailed();
-			const latest = readLatestMetadataIfPresent(artifactDir);
+			const latest = readLatestCloudSmokeMetadata(artifactDir);
 			const agentId = latest?.metadata.run?.agentId;
 			if (!CLOUD_AGENT_ID_PATTERN.test(agentId ?? "")) return undefined;
 			if (CLOUD_RUN_ID_PATTERN.test(latest.metadata.run?.runId ?? "")) {
@@ -782,7 +480,7 @@ async function runMissingBranchLane({ artifactRoot, repo, timeoutMs }) {
 		fail("missing branch did not fail closed with branch/ref evidence", failureOutput);
 	}
 	const agentIds = new Set();
-	for (const { metadataPath, metadata } of readMetadata(artifactDir)) {
+	for (const { metadataPath, metadata } of readCloudSmokeMetadata(artifactDir)) {
 		const agentId = metadata.run?.agentId ?? metadata.providerMeta?.cloudAgentId;
 		const runId = metadata.run?.runId;
 		if (agentId) {

@@ -15,17 +15,19 @@ export interface CursorUsagePromptOptions extends CursorPromptOptions {
 }
 
 /**
- * Raw SDK turn-ended usage fields.
+ * Raw SDK `turn-ended` usage fields.
  *
- * IMPORTANT: the Cursor SDK `turn-ended` event reports `inputTokens` as the total prompt tokens
- * (regular input + cache read), NOT regular input alone.  `cacheReadTokens` is a separate field
- * that overlaps with `inputTokens`.  Do NOT sum all four fields for totalTokens — that
- * double-counts cache read.  Use `inputTokens + outputTokens + cacheWriteTokens` for the
- * true total (or equivalently split input: `(inputTokens - cacheReadTokens) + outputTokens +
- * cacheReadTokens + cacheWriteTokens`).
+ * Contract (verified against @cursor/sdk 1.0.23 and the Cursor usage CSV, 2026-07-28):
+ * `inputTokens` is the FULL prompt size (it is full-context-sized and confirmed to include
+ * `cacheReadTokens`). The cache fields are a partition of that prompt, not additive with it.
+ * pi models `usage.input` / `cacheRead` / `cacheWrite` as disjoint additive prompt components,
+ * so `applyCursorSdkUsage` stores the uncached share as `input` (`inputTokens - cacheRead -
+ * cacheWrite`) and keeps the cache fields separately; `totalTokens` is context occupancy
+ * (`inputTokens + outputTokens`). Do NOT sum all four SDK fields — that double-counts the cache
+ * share and inflates compaction/session totals (~2x context).
  */
 export interface CursorSdkTurnUsage {
-	/** Total prompt tokens (regular input + cacheRead).  Does NOT include cacheWriteTokens. */
+	/** Full prompt tokens, including the cacheRead and cacheWrite shares. */
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;
@@ -95,28 +97,45 @@ export function estimateCursorContextTotalTokens(partial: AssistantMessage, mode
 	return estimateCursorContextTokens(withAssistantMessage(context, partial), getCursorPromptOptions(model));
 }
 
+function getCursorSdkUncachedInputTokens(turnUsage: CursorSdkTurnUsage): number {
+	// SDK inputTokens is the full prompt; cache fields are a partition of it (pi-additive components).
+	return turnUsage.inputTokens - turnUsage.cacheReadTokens - turnUsage.cacheWriteTokens;
+}
+
 export function isCursorSdkUsageSafeForPiMessage(turnUsage: CursorSdkTurnUsage, model: Model<Api>): boolean {
-	// All SDK fields must be finite and non-negative.
 	const counts = [turnUsage.inputTokens, turnUsage.outputTokens, turnUsage.cacheReadTokens, turnUsage.cacheWriteTokens];
-	// cacheReadTokens is already included in inputTokens (per the CursorSdkTurnUsage contract);
-	// the true total is input + output + cacheWrite (no separate cacheRead add).
-	const trueTotal = turnUsage.inputTokens + turnUsage.outputTokens + turnUsage.cacheWriteTokens;
+	const uncachedInput = getCursorSdkUncachedInputTokens(turnUsage);
 	return (
 		counts.every((count) => Number.isFinite(count) && count >= 0) &&
+		Number.isFinite(uncachedInput) &&
+		uncachedInput >= 0 &&
 		turnUsage.outputTokens <= model.maxTokens &&
-		trueTotal <= model.contextWindow
+		turnUsage.inputTokens + turnUsage.outputTokens <= model.contextWindow
 	);
 }
 
 export function applyCursorSdkUsage(partial: AssistantMessage, turnUsage: CursorSdkTurnUsage): void {
-	// SDK inputTokens = regular input + cacheRead (see CursorSdkTurnUsage doc).
-	// Subtract cacheRead to get the actual billed input tokens, then re-sum for the true total.
-	const actualInput = Math.max(0, turnUsage.inputTokens - turnUsage.cacheReadTokens);
-	partial.usage.input = actualInput;
+	// Pi treats input/cacheRead/cacheWrite as disjoint additive prompt components.
+	partial.usage.input = getCursorSdkUncachedInputTokens(turnUsage);
 	partial.usage.output = turnUsage.outputTokens;
 	partial.usage.cacheRead = turnUsage.cacheReadTokens;
 	partial.usage.cacheWrite = turnUsage.cacheWriteTokens;
-	partial.usage.totalTokens = actualInput + turnUsage.outputTokens + turnUsage.cacheReadTokens + turnUsage.cacheWriteTokens;
+	// totalTokens is context occupancy (full prompt + output), not the sum of spend components alone.
+	partial.usage.totalTokens = turnUsage.inputTokens + turnUsage.outputTokens;
+}
+
+function getLastAcceptedContextOccupancy(context: Context): number {
+	for (let index = context.messages.length - 1; index >= 0; index -= 1) {
+		const message = context.messages[index];
+		if (message.role !== "assistant" || !("usage" in message)) continue;
+		const assistant = message as AssistantMessage;
+		if (assistant.stopReason === "aborted" || assistant.stopReason === "error" || !assistant.usage) continue;
+		const { usage } = assistant;
+		const total =
+			usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		if (Number.isFinite(total) && total > 0) return total;
+	}
+	return 0;
 }
 
 export function applyCursorApproximateUsage(partial: AssistantMessage, model: Model<Api>, context: Context, sessionInputTokens: number): void {
@@ -125,9 +144,11 @@ export function applyCursorApproximateUsage(partial: AssistantMessage, model: Mo
 	partial.usage.output = outputTokens;
 	partial.usage.cacheRead = 0;
 	partial.usage.cacheWrite = 0;
+	// Never report less occupancy than the last accepted assistant measurement in this context.
 	partial.usage.totalTokens = Math.max(
 		partial.usage.input + partial.usage.output,
 		estimateCursorContextTotalTokens(partial, model, context),
+		getLastAcceptedContextOccupancy(context),
 	);
 }
 

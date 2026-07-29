@@ -2,6 +2,7 @@ import { AuthenticationError, IntegrationNotConnectedError } from "@cursor/sdk";
 import { describe, expect, it } from "vitest";
 import {
 	classifyCursorConnectError,
+	isCursorSdkStalledRepeatedlyError,
 	formatCursorSdkAbortMessage,
 	formatCursorSdkRunFailureDetail,
 	isUnauthenticatedConnectError,
@@ -89,6 +90,25 @@ function makeCursorSdkStallAbortWrapperConnectError(): Error & { rawMessage: str
 		"ConnectError: [unknown] [canceled] This operation was aborted\n" +
 		"    at a.from (file:///repo/node_modules/@cursor/sdk/dist/esm/index.js:1:1125976)\n" +
 		"    at file:///repo/node_modules/@cursor/sdk/dist/esm/996.js:1:5832";
+	return error;
+}
+
+
+function makeCursorSdkStalledRepeatedlyRetriableError(): Error & { kind: string; cause: Error } {
+	const cause = new Error("[unknown] operation was aborted") as Error & { name: string; code: number };
+	cause.name = "ConnectError";
+	cause.code = 2;
+	cause.stack =
+		"ConnectError: [unknown] operation was aborted\n" +
+		"    at file:///repo/node_modules/@connectrpc/connect-node/dist/esm/node-universal-client.js:293:63";
+	const error = new Error("Connection stalled repeatedly") as Error & { kind: string; cause: Error };
+	error.name = "RetriableError";
+	error.kind = "RetriableError";
+	error.cause = cause;
+	error.stack =
+		"RetriableError: Connection stalled repeatedly\n" +
+		"    at fe (file:///repo/node_modules/@cursor/sdk/dist/esm/357.js:1:62073)\n" +
+		"    at file:///repo/node_modules/@cursor/sdk/dist/esm/index.js:1:1125976";
 	return error;
 }
 
@@ -344,6 +364,17 @@ describe("cursor-provider-errors", () => {
 		expect(message).toContain("Network error");
 		expect(message).toContain("pi will retry automatically");
 		expect(message).not.toContain("operation was aborted");
+	});
+
+
+	it("recognizes installed Cursor SDK RetriableError connection-stalled-repeatedly as retryable network failure", () => {
+		const error = makeCursorSdkStalledRepeatedlyRetriableError();
+		expect(classifyCursorConnectError(error)).toBeUndefined();
+		expect(isCursorSdkStalledRepeatedlyError(error)).toBe(true);
+		const message = sanitizeCursorProviderError(error, "test-key");
+		expect(message).toContain("Network error");
+		expect(message).toContain("pi will retry automatically");
+		expect(message).not.toContain("stalled repeatedly");
 	});
 
 	it("classifies Cursor backend unavailable ConnectErrors by code and details", () => {

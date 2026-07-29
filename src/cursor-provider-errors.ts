@@ -165,6 +165,23 @@ function isCursorSdkStallAbortNetworkError(code: unknown, evidence: string, stac
 	);
 }
 
+
+/**
+ * @cursor/sdk@1.0.23 throws internal RetriableError (name/kind "RetriableError") with message
+ * "Connection stalled repeatedly" (or "Connection stalled") after fetchWithRetry exhausts stalls.
+ * The ConnectError is only the cause; the top-level error is not a ConnectError.
+ */
+export function isCursorSdkStalledRepeatedlyError(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false;
+	const record = error as { name?: unknown; kind?: unknown; message?: unknown; stack?: unknown };
+	const name = typeof record.name === "string" ? record.name : typeof record.kind === "string" ? record.kind : "";
+	if (name !== "RetriableError") return false;
+	const message = typeof record.message === "string" ? record.message.trim() : "";
+	if (!/^Connection stalled(?: repeatedly)?$/i.test(message)) return false;
+	const stack = typeof record.stack === "string" ? record.stack : "";
+	return /(?:^|[\\/])node_modules[\\/]@cursor[\\/]sdk[\\/]dist[\\/]/.test(stack) || stack.includes("@cursor/sdk");
+}
+
 function isCursorExtensionConnectStack(stack: string): boolean {
 	// pi runs Cursor SDK in Node, where the SDK dynamically imports connect-node.
 	// connect-web is the SDK's Bun/Deno path and is intentionally not classified for supported pi runs.
@@ -222,6 +239,7 @@ export function classifyCursorConnectError(error: unknown): CursorConnectErrorCl
 	if (isCursorSdkStallAbortNetworkError(code, evidence, stackEvidence)) {
 		return { kind: "network", source: getCursorConnectSource(error, record) };
 	}
+
 
 	if (isUnauthenticatedConnectCode(code) || isLikelyAuthError(evidence)) {
 		return { kind: "unauthenticated", source: getCursorConnectSource(error, record) };
@@ -354,7 +372,7 @@ export function sanitizeCursorProviderError(
 	) {
 		return runtimeTarget === "cloud" ? CLOUD_AUTH_CURSOR_SDK_ERROR_MESSAGE : AUTH_CURSOR_SDK_ERROR_MESSAGE;
 	}
-	if (connectClassification?.kind === "network" || isLikelyNetworkTimeout(scrubbed)) return NETWORK_CURSOR_SDK_ERROR_MESSAGE;
+	if (connectClassification?.kind === "network" || isCursorSdkStalledRepeatedlyError(error) || isLikelyNetworkTimeout(scrubbed)) return NETWORK_CURSOR_SDK_ERROR_MESSAGE;
 	if (isGenericCursorRunFailureMessage(scrubbed)) return RETRYABLE_CURSOR_RUN_FAILURE_PREFIX;
 	if (isGenericErrorMessage(scrubbed)) return GENERIC_CURSOR_SDK_ERROR_MESSAGE;
 	return scrubbed || GENERIC_CURSOR_SDK_ERROR_MESSAGE;

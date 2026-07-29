@@ -210,13 +210,13 @@ describe("streamCursor native replay live run", () => {
 		expect(firstDone.message.stopReason).toBe("toolUse");
 		expect(firstDone.message.content.map((block) => block.type)).toEqual(["text", "toolCall"]);
 		expect(firstDone.message.content[0]).toEqual({ type: "text", text: "I am checking files." });
-		// SDK inputTokens (25_432) = actual input (1_432) + cacheRead (24_000)
+		// SDK inputTokens (25_432) = uncached input (1_309) + cacheRead (24_000) + cacheWrite (123)
 		expect(firstDone.message.usage).toMatchObject({
-			input: 1_432,
+			input: 25_432 - 24_000 - 123,
 			output: 612,
 			cacheRead: 24_000,
 			cacheWrite: 123,
-			totalTokens: 1_432 + 612 + 24_000 + 123,
+			totalTokens: 25_432 + 612,
 		});
 		expect(toolCall!.name).toBe("read");
 		expect(hasEventType(firstEvents, "toolcall_delta")).toBe(true);
@@ -581,8 +581,7 @@ describe("streamCursor native replay live run", () => {
 		expect(hasEventType(events, "toolcall_start")).toBe(false);
 		expect(collectThinkingDeltas(events)).toContain("Cursor subagent");
 		expect(done.reason).toBe("stop");
-		// SDK inputTokens (31_000) = actual input (1_000) + cacheRead (30_000)
-		expect(done.message.usage).toMatchObject({ input: 1_000, output: 700, cacheRead: 30_000, cacheWrite: 0, totalTokens: 1_000 + 700 + 30_000 + 0 });
+		expect(done.message.usage).toMatchObject({ input: 1_000, output: 700, cacheRead: 30_000, cacheWrite: 0, totalTokens: 31_700 });
 	});
 
 	it("does not replay queued live-run tools that became inactive after the run started", async () => {

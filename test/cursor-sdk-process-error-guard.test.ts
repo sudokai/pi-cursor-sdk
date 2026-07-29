@@ -94,24 +94,6 @@ function makeCursorSdkWriteIterableClosedError(): Error {
 	return error;
 }
 
-function makeCursorSdkRawAbortDomException(): DOMException {
-	const error = new DOMException("This operation was aborted", "AbortError");
-	error.stack =
-		"AbortError: This operation was aborted\n" +
-		"    at AbortSignal.abort (/repo/node_modules/@cursor/sdk/dist/esm/996.js:1:5705)\n" +
-		"    at Y.onStall (/repo/node_modules/@cursor/sdk/dist/esm/357.js:1:75246)";
-	return error;
-}
-
-function makeCursorSdkRawAbortError(): Error {
-	const error = new Error("This operation was aborted");
-	error.name = "AbortError";
-	error.stack =
-		"AbortError: This operation was aborted\n" +
-		"    at abort (/repo/node_modules/@cursor/sdk/dist/esm/index.js:1:1125976)";
-	return error;
-}
-
 function makeCursorSdkUnauthenticatedConnectError(): Error & { rawMessage: string; code: number } {
 	const error = new Error("[unauthenticated] Error") as Error & { rawMessage: string; code: number };
 	error.name = "ConnectError";
@@ -512,114 +494,6 @@ setTimeout(() => console.log("survived"), 20);
 		} finally {
 			process.removeListener("uncaughtException", listener);
 			suppression.dispose();
-		}
-	});
-
-	it("suppresses a raw Cursor SDK DOMException AbortError while a suppressing provider turn is active", () => {
-		const turnGuard = installCursorSdkProcessErrorGuard();
-		turnGuard.suppressAbortErrors();
-		let listenerCalled = false;
-		const listener = () => {
-			listenerCalled = true;
-		};
-		process.once("uncaughtException", listener);
-		try {
-			const emitted = process.emit("uncaughtException", makeCursorSdkRawAbortDomException(), "uncaughtException");
-			expect(emitted).toBe(true);
-			expect(listenerCalled).toBe(false);
-		} finally {
-			process.removeListener("uncaughtException", listener);
-			turnGuard.dispose();
-		}
-	});
-
-	it("suppresses a raw Cursor SDK DOMException AbortError via the unhandledRejection path when suppression is active", () => {
-		const turnGuard = installCursorSdkProcessErrorGuard();
-		turnGuard.suppressAbortErrors();
-		let listenerCalled = false;
-		const listener = () => {
-			listenerCalled = true;
-		};
-		process.once("unhandledRejection", listener);
-		try {
-			const emitted = process.emit("unhandledRejection", makeCursorSdkRawAbortDomException(), Promise.resolve());
-			expect(emitted).toBe(true);
-			expect(listenerCalled).toBe(false);
-		} finally {
-			process.removeListener("unhandledRejection", listener);
-			turnGuard.dispose();
-		}
-	});
-
-	it("does not suppress a Cursor SDK AbortError for a provider turn that has not declared abort suppression", () => {
-		const turnGuard = installCursorSdkProcessErrorGuard();
-		let listenerCalled = false;
-		const listener = () => {
-			listenerCalled = true;
-		};
-		process.once("uncaughtException", listener);
-		try {
-			const emitted = process.emit("uncaughtException", makeCursorSdkRawAbortDomException(), "uncaughtException");
-			expect(emitted).toBe(true);
-			expect(listenerCalled).toBe(true);
-		} finally {
-			process.removeListener("uncaughtException", listener);
-			turnGuard.dispose();
-		}
-	});
-
-	it("suppresses a plain Error AbortError variant with Cursor SDK provenance when suppression is active", () => {
-		const turnGuard = installCursorSdkProcessErrorGuard();
-		turnGuard.suppressAbortErrors();
-		let listenerCalled = false;
-		const listener = () => {
-			listenerCalled = true;
-		};
-		process.once("uncaughtException", listener);
-		try {
-			const emitted = process.emit("uncaughtException", makeCursorSdkRawAbortError(), "uncaughtException");
-			expect(emitted).toBe(true);
-			expect(listenerCalled).toBe(false);
-		} finally {
-			process.removeListener("uncaughtException", listener);
-			turnGuard.dispose();
-		}
-	});
-
-	it("does not suppress an AbortError without Cursor SDK stack provenance", () => {
-		const turnGuard = installCursorSdkProcessErrorGuard();
-		turnGuard.suppressAbortErrors();
-		const error = makeCursorSdkRawAbortDomException();
-		error.stack = "AbortError: This operation was aborted\n    at abort (/repo/src/app.ts:1:1)";
-		let listenerCalled = false;
-		const listener = () => {
-			listenerCalled = true;
-		};
-		process.once("uncaughtException", listener);
-		try {
-			const emitted = process.emit("uncaughtException", error, "uncaughtException");
-			expect(emitted).toBe(true);
-			expect(listenerCalled).toBe(true);
-		} finally {
-			process.removeListener("uncaughtException", listener);
-			turnGuard.dispose();
-		}
-	});
-
-	it("does not suppress a Cursor SDK AbortError when no provider turn is active", () => {
-		const sessionGuard = installCursorSdkSessionProcessErrorGuard();
-		let listenerCalled = false;
-		const listener = () => {
-			listenerCalled = true;
-		};
-		process.once("uncaughtException", listener);
-		try {
-			const emitted = process.emit("uncaughtException", makeCursorSdkRawAbortDomException(), "uncaughtException");
-			expect(emitted).toBe(true);
-			expect(listenerCalled).toBe(true);
-		} finally {
-			process.removeListener("uncaughtException", listener);
-			sessionGuard.dispose();
 		}
 	});
 

@@ -16,6 +16,7 @@ export default {
 	requiredSuites: [
 		"platform-build",
 		"cursor-native-visual-matrix",
+		"cursor-http1-live",
 		"cursor-bridge-visual-matrix",
 		"cursor-abort-cleanup",
 		...LOCAL_RESUME_SUITE_NAMES,
