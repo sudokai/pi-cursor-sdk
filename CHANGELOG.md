@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Stop treating multi-invocation Cursor SDK `turn-ended` billing sums as context-window occupancy: keep CSV-aligned spend fields, count `onStep` `assistantMessage` events, and estimate occupancy (replayable context / last accepted / per-invocation mean) when a run has two or more model invocations so footer context % no longer jumps with the billing aggregate.
+
 ## 0.1.62 - 2026-07-28
 
 ### Added

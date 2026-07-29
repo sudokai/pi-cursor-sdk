@@ -4,6 +4,7 @@ import { estimateCursorPromptMessageTokens } from "../src/context.js";
 import {
 	consumeCursorLiveToolResults,
 	createCursorLiveRunAccountingState,
+	recordCursorLiveAssistantMessageStep,
 	recordCursorLiveSdkTurnEnded,
 	takeCursorLiveSdkTurnUsage,
 	takeCursorLiveTurnInputTokens,
@@ -94,6 +95,13 @@ describe("cursor live-run accounting", () => {
 		expect(taken.sdkTurnUsage).toEqual({ inputTokens: 200, outputTokens: 20, cacheReadTokens: 60, cacheWriteTokens: 0 });
 		expect(taken.state.sdkTurnUsage).toBeUndefined();
 		expect(taken.state.sdkTurnEnded).toBe(false);
+	});
+
+	it("counts assistantMessage steps for multi-invocation occupancy detection", () => {
+		const first = recordCursorLiveAssistantMessageStep(createCursorLiveRunAccountingState(100));
+		const second = recordCursorLiveAssistantMessageStep(first);
+		expect(first.assistantMessageCount).toBe(1);
+		expect(second.assistantMessageCount).toBe(2);
 	});
 
 	it("ignores nonmatching tool results without consuming them", () => {

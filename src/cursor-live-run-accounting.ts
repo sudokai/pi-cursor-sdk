@@ -8,6 +8,8 @@ export interface CursorLiveRunAccountingState {
 	consumedToolResultIds: ReadonlySet<string>;
 	sdkTurnEnded: boolean;
 	sdkTurnUsage?: CursorSdkTurnUsage;
+	/** Count of SDK `onStep` steps with `type: "assistantMessage"` for this run. */
+	assistantMessageCount: number;
 }
 
 export interface CursorLiveToolResultConsumption {
@@ -23,6 +25,7 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
 		promptInputTokensReported: false,
 		consumedToolResultIds: new Set(),
 		sdkTurnEnded: false,
+		assistantMessageCount: 0,
 	};
 }
 
@@ -30,9 +33,11 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
  * Records an SDK `turn-ended` usage event. The latest per-turn usage overwrites any
  * pending value (it is never summed): the SDK emits per-turn usage via `toTokenUsage`,
  * and cross-turn summing is a separate opt-in helper (`sumTokenUsage`) that double-counts
- * if applied here. `turn-ended` is also not carried forward across pi turns: if it arrives
- * after its turn has emitted it belongs to a turn that already fell back to approximate,
- * and applying it to a later turn would mis-attribute usage (see
+ * if applied here. Note the SDK may still deliver **already-aggregated** usage for a
+ * multi-invocation run inside that single event — occupancy policy lives in
+ * `cursor-usage-accounting.ts`. `turn-ended` is also not carried forward across pi turns:
+ * if it arrives after its turn has emitted it belongs to a turn that already fell back to
+ * approximate, and applying it to a later turn would mis-attribute usage (see
  * `docs/investigations/cursor-live-run-turn-ended-usage-2026-07-27.md` and the contract in
  * `docs/cursor-model-ux-spec.md`). The next `takeCursorLiveSdkTurnUsage` consumes the
  * recorded value.
@@ -42,6 +47,11 @@ export function recordCursorLiveSdkTurnEnded(
 	sdkTurnUsage?: CursorSdkTurnUsage,
 ): CursorLiveRunAccountingState {
 	return { ...state, sdkTurnEnded: true, sdkTurnUsage };
+}
+
+/** Counts one SDK `assistantMessage` step toward multi-invocation occupancy detection. */
+export function recordCursorLiveAssistantMessageStep(state: CursorLiveRunAccountingState): CursorLiveRunAccountingState {
+	return { ...state, assistantMessageCount: state.assistantMessageCount + 1 };
 }
 
 export function takeCursorLiveSdkTurnUsage(state: CursorLiveRunAccountingState): {

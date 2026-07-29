@@ -9,9 +9,12 @@ import {
 	applyCursorUsage,
 	estimateCursorAssistantSessionOutputTokens,
 	estimateCursorContextTotalTokens,
+	getCursorSdkBillingTotalTokens,
+	isCursorSdkUsageMultiInvocation,
 	isCursorSdkUsageSafeForPiMessage,
 	readCursorSdkTurnUsage,
 	readCursorSdkTurnUsageFromUpdate,
+	resolveCursorSdkOccupancyTokens,
 } from "../src/cursor-usage-accounting.js";
 import { makeModel } from "./helpers/pi-harness.js";
 
@@ -101,6 +104,80 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage.input + partial.usage.cacheRead + partial.usage.cacheWrite + partial.usage.output).toBe(
 			partial.usage.totalTokens,
 		);
+	});
+
+	it("does not use multi-invocation billing sums as context occupancy", () => {
+		// Captured 2026-07-29 trail-share-studio debug session turn-012 → turn-013:
+		// 1 assistantMessage → occupancy ≈ billing total; 2 assistantMessages → billing ~2×.
+		const model = { ...makeModel(), contextWindow: 200_000, maxTokens: 64_000 };
+		const prior = makeAssistantMessage([{ type: "text", text: "Prior single-call turn." }]);
+		prior.usage = {
+			input: 3_066,
+			output: 1_602,
+			cacheRead: 59_719,
+			cacheWrite: 0,
+			totalTokens: 64_387,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const context: Context = {
+			systemPrompt: "Be helpful.",
+			messages: [
+				{ role: "user", content: "Hello", timestamp: 1 },
+				prior,
+				{ role: "user", content: "Continue", timestamp: 3 },
+			],
+		};
+		const partial = makeAssistantMessage([{ type: "text", text: "Multi-call answer." }]);
+		const multiInvocationTurn = {
+			inputTokens: 131_743,
+			outputTokens: 2_414,
+			cacheReadTokens: 127_350,
+			cacheWriteTokens: 0,
+		};
+
+		expect(getCursorSdkBillingTotalTokens(multiInvocationTurn)).toBe(134_157);
+		expect(isCursorSdkUsageMultiInvocation(2)).toBe(true);
+		expect(isCursorSdkUsageSafeForPiMessage(multiInvocationTurn, model)).toBe(true);
+
+		applyCursorUsage(partial, model, context, 7, {
+			turn: multiInvocationTurn,
+			modelInvocationCount: 2,
+		});
+
+		// Spend fields keep the run billing aggregate (CSV-aligned).
+		expect(partial.usage).toMatchObject({
+			input: 4_393,
+			output: 2_414,
+			cacheRead: 127_350,
+			cacheWrite: 0,
+		});
+		// Occupancy must not jump to the 2× billing sum (~67% of 200k).
+		expect(partial.usage.totalTokens).toBeLessThan(100_000);
+		expect(partial.usage.totalTokens).toBe(
+			resolveCursorSdkOccupancyTokens(partial, multiInvocationTurn, model, context, 2),
+		);
+		expect(partial.usage.totalTokens).toBeGreaterThanOrEqual(64_387);
+		expect(partial.usage.totalTokens).toBe(Math.ceil(134_157 / 2));
+	});
+
+	it("keeps single-invocation SDK occupancy when assistantMessage count is 0 or 1", () => {
+		const model = { ...makeModel(), contextWindow: 200_000, maxTokens: 64_000 };
+		const context: Context = {
+			systemPrompt: "Be helpful.",
+			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+		};
+		const turn = {
+			inputTokens: 62_785,
+			outputTokens: 1_602,
+			cacheReadTokens: 59_719,
+			cacheWriteTokens: 0,
+		};
+		for (const modelInvocationCount of [undefined, 0, 1] as const) {
+			const partial = makeAssistantMessage([{ type: "text", text: "Single-call answer." }]);
+			applyCursorUsage(partial, model, context, 7, { turn, modelInvocationCount });
+			expect(partial.usage.totalTokens).toBe(64_387);
+			expect(isCursorSdkUsageMultiInvocation(modelInvocationCount)).toBe(false);
+		}
 	});
 
 	it("rejects SDK usage whose cache partition exceeds inputTokens", () => {
