@@ -188,7 +188,6 @@ export class CursorRunFinalizer {
 				);
 				applyCursorUsage(partial, model, context, prepared.meta.promptInputTokens, {
 					turn: prepared.runtime.turnCoordinator.lastSdkTurnUsage,
-					modelInvocationCount: prepared.runtime.turnCoordinator.modelInvocationCount,
 				});
 				if (prepared.meta.resumeNotice) emitDisplayOnlyTraceBlock(stream, partial, prepared.meta.resumeNotice);
 				if (displayOnlyTraceBlock) emitDisplayOnlyTraceBlock(stream, partial, displayOnlyTraceBlock);

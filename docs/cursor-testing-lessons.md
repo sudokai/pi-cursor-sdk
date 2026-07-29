@@ -164,12 +164,12 @@ Successful tool results are ignored even when file contents mention those string
 Session summaries can hide per-message usage bugs. When investigating token or compaction regressions, inspect assistant message `usage` rows directly:
 
 - `usage.input`, `usage.output`, `usage.cacheRead`, and `usage.cacheWrite` are additive spend-style counters for the assistant turn.
-- `usage.totalTokens` is pi context occupancy for that turn, not a value to sum across all assistant messages.
-- Cursor SDK `inputTokens` is the full prompt (or a multi-invocation billing sum); map spend to pi as uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`. Use `totalTokens = inputTokens + outputTokens` as occupancy only for single-invocation runs; multi-invocation runs must estimate occupancy instead of using the billing sum.
-- No single assistant message should persist SDK/full-agent-context-sized usage outside the selected model window.
+- `usage.totalTokens` is pi context occupancy for that turn, not a value to sum across all assistant messages, and must never be copied from SDK billing totals.
+- Cursor SDK `inputTokens` is the full prompt (or a multi-invocation billing sum); map spend to pi as uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`. Occupancy is always a local context estimate (floored at last accepted), including for single-invocation runs.
+- Over-window or multi-invocation billing spend may still land on the stop message; only occupancy must stay estimate-scale so compaction cannot treat a billing blob as window fill.
 - Real bad-session evidence should be reduced to a sanitized fixture, like `test/fixtures/cursor-run-usage-compaction-poison.jsonl`, instead of committing raw session JSONL.
 
-The compaction poison fixture mirrors the observed failure shape: one assistant message with `RunResult`-sized input/cache-read counts near 1M immediately before compaction. Regression coverage should prove that such usage falls back to bounded pi estimates before it reaches `AssistantMessage.usage`.
+The compaction poison fixture mirrors the observed failure shape: one assistant message with `RunResult`-sized input/cache-read counts near 1M immediately before compaction. Regression coverage should prove that occupancy (`totalTokens`) stays bounded even when spend fields reflect large SDK billing.
 
 ### False-positive edge case (2026-05-23)
 

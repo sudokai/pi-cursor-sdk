@@ -10,11 +10,10 @@ import {
 	estimateCursorAssistantSessionOutputTokens,
 	estimateCursorContextTotalTokens,
 	getCursorSdkBillingTotalTokens,
-	isCursorSdkUsageMultiInvocation,
-	isCursorSdkUsageSafeForPiMessage,
+	isCursorSdkUsageStructurallyValid,
 	readCursorSdkTurnUsage,
 	readCursorSdkTurnUsageFromUpdate,
-	resolveCursorSdkOccupancyTokens,
+	resolveCursorOccupancyTokens,
 } from "../src/cursor-usage-accounting.js";
 import { makeModel } from "./helpers/pi-harness.js";
 
@@ -55,7 +54,7 @@ describe("cursor usage accounting", () => {
 		expect(estimateCursorAssistantSessionOutputTokens(withToolCall)).toBeGreaterThan(estimateCursorAssistantSessionOutputTokens(textOnly));
 	});
 
-	it("applies real SDK usage when a turn reports usage within the model window", () => {
+	it("applies real SDK spend and estimated occupancy for in-window turn-ended usage", () => {
 		const model = makeModel();
 		const context: Context = {
 			systemPrompt: "Be helpful.",
@@ -71,13 +70,11 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage.output).toBe(612);
 		expect(partial.usage.cacheRead).toBe(24_000);
 		expect(partial.usage.cacheWrite).toBe(123);
-		expect(partial.usage.totalTokens).toBe(25_432 + 612);
-		expect(partial.usage.input + partial.usage.cacheRead + partial.usage.cacheWrite + partial.usage.output).toBe(
-			partial.usage.totalTokens,
-		);
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
+		expect(partial.usage.totalTokens).not.toBe(25_432 + 612);
 	});
 
-	it("maps SDK cache fields to disjoint pi components and occupancy totalTokens", () => {
+	it("maps SDK cache fields to disjoint pi spend components", () => {
 		const model = makeModel();
 		const context: Context = {
 			systemPrompt: "Be helpful.",
@@ -92,22 +89,19 @@ describe("cursor usage accounting", () => {
 			cacheWriteTokens: 4_927,
 		};
 
-		expect(isCursorSdkUsageSafeForPiMessage(turn, model)).toBe(true);
+		expect(isCursorSdkUsageStructurallyValid(turn)).toBe(true);
 		applyCursorUsage(partial, model, context, 7, { turn });
 		expect(partial.usage).toMatchObject({
 			input: 46_965 - 42_036 - 4_927,
 			output: 3,
 			cacheRead: 42_036,
 			cacheWrite: 4_927,
-			totalTokens: 46_968,
 		});
-		expect(partial.usage.input + partial.usage.cacheRead + partial.usage.cacheWrite + partial.usage.output).toBe(
-			partial.usage.totalTokens,
-		);
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 	});
 
-	it("does not use multi-invocation billing sums as context occupancy", () => {
-		// Two model invocations: turn-ended billing total is ~2× one prompt; occupancy must not use that sum.
+	it("applies multi-invocation billing spend with estimated occupancy", () => {
+		// End-of-run turn-ended may sum multiple model invocations (CSV-aligned billing).
 		const model = { ...makeModel(), contextWindow: 200_000, maxTokens: 64_000 };
 		const prior = makeAssistantMessage([{ type: "text", text: "Prior single-call turn." }]);
 		prior.usage = {
@@ -135,61 +129,61 @@ describe("cursor usage accounting", () => {
 		};
 
 		expect(getCursorSdkBillingTotalTokens(multiInvocationTurn)).toBe(134_157);
-		expect(isCursorSdkUsageMultiInvocation(2)).toBe(true);
-		expect(isCursorSdkUsageSafeForPiMessage(multiInvocationTurn, model)).toBe(true);
 
-		applyCursorUsage(partial, model, context, 7, {
-			turn: multiInvocationTurn,
-			modelInvocationCount: 2,
-		});
+		applyCursorUsage(partial, model, context, 7, { turn: multiInvocationTurn });
 
-		// Spend fields keep the run billing aggregate (CSV-aligned).
 		expect(partial.usage).toMatchObject({
 			input: 4_393,
 			output: 2_414,
 			cacheRead: 127_350,
 			cacheWrite: 0,
 		});
-		// Context occupancy uses per-invocation mean / last accepted, not the 2× billing sum.
-		expect(partial.usage.totalTokens).toBeLessThan(100_000);
-		expect(partial.usage.totalTokens).toBe(
-			resolveCursorSdkOccupancyTokens(partial, multiInvocationTurn, model, context, 2),
-		);
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeGreaterThanOrEqual(64_387);
-		expect(partial.usage.totalTokens).toBe(Math.ceil(134_157 / 2));
+		expect(partial.usage.totalTokens).toBeLessThan(getCursorSdkBillingTotalTokens(multiInvocationTurn));
 	});
 
-	it("keeps single-invocation SDK occupancy when model invocation count is 0 or 1", () => {
-		const model = { ...makeModel(), contextWindow: 200_000, maxTokens: 64_000 };
+	it("applies structurally valid multi-invocation spend above the model window", () => {
+		const model = { ...makeModel(), contextWindow: 100_000, maxTokens: 16_000 };
 		const context: Context = {
 			systemPrompt: "Be helpful.",
 			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
 		};
-		const turn = {
-			inputTokens: 62_785,
-			outputTokens: 1_602,
-			cacheReadTokens: 59_719,
-			cacheWriteTokens: 0,
+		const partial = makeAssistantMessage([{ type: "text", text: "Done." }]);
+		const overWindowMulti = {
+			inputTokens: 220_000,
+			outputTokens: 3_000,
+			cacheReadTokens: 200_000,
+			cacheWriteTokens: 5_000,
 		};
-		for (const modelInvocationCount of [undefined, 0, 1] as const) {
-			const partial = makeAssistantMessage([{ type: "text", text: "Single-call answer." }]);
-			applyCursorUsage(partial, model, context, 7, { turn, modelInvocationCount });
-			expect(partial.usage.totalTokens).toBe(64_387);
-			expect(isCursorSdkUsageMultiInvocation(modelInvocationCount)).toBe(false);
-		}
+
+		expect(getCursorSdkBillingTotalTokens(overWindowMulti)).toBeGreaterThan(model.contextWindow);
+		expect(isCursorSdkUsageStructurallyValid(overWindowMulti)).toBe(true);
+
+		applyCursorUsage(partial, model, context, 7, { turn: overWindowMulti });
+
+		expect(partial.usage).toMatchObject({
+			input: 15_000,
+			output: 3_000,
+			cacheRead: 200_000,
+			cacheWrite: 5_000,
+		});
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
+		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
 	});
 
 	it("rejects SDK usage whose cache partition exceeds inputTokens", () => {
-		const model = makeModel();
 		expect(
-			isCursorSdkUsageSafeForPiMessage(
-				{ inputTokens: 100, outputTokens: 1, cacheReadTokens: 80, cacheWriteTokens: 30 },
-				model,
-			),
+			isCursorSdkUsageStructurallyValid({
+				inputTokens: 100,
+				outputTokens: 1,
+				cacheReadTokens: 80,
+				cacheWriteTokens: 30,
+			}),
 		).toBe(false);
 	});
 
-	it("rejects SDK usage whose input+output would exceed the selected model window", () => {
+	it("applies structurally valid over-window spend and keeps occupancy estimated", () => {
 		const model = makeModel();
 		const context: Context = {
 			systemPrompt: "Be helpful.",
@@ -203,17 +197,27 @@ describe("cursor usage accounting", () => {
 			cacheWriteTokens: 1,
 		};
 
-		expect(isCursorSdkUsageSafeForPiMessage(overWindowUsage, model)).toBe(false);
-		expect(isCursorSdkUsageSafeForPiMessage({ ...overWindowUsage, inputTokens: -1 }, model)).toBe(false);
-		expect(isCursorSdkUsageSafeForPiMessage({ ...overWindowUsage, inputTokens: Number.NaN }, model)).toBe(false);
+		expect(isCursorSdkUsageStructurallyValid(overWindowUsage)).toBe(true);
+		expect(isCursorSdkUsageStructurallyValid({ ...overWindowUsage, inputTokens: -1 })).toBe(false);
+		expect(
+			isCursorSdkUsageStructurallyValid({
+				inputTokens: Number.NaN,
+				outputTokens: 11,
+				cacheReadTokens: 9,
+				cacheWriteTokens: 1,
+			}),
+		).toBe(false);
 
 		applyCursorUsage(partial, model, context, 7, { turn: overWindowUsage });
 
-		expect(partial.usage.input).toBe(7);
+		expect(partial.usage.cacheRead).toBe(9);
+		expect(partial.usage.cacheWrite).toBe(1);
+		expect(partial.usage.output).toBe(11);
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
 	});
 
-	it("rejects full-run-sized SDK usage before it can poison compaction totals", () => {
+	it("applies full-run-sized SDK spend without poisoning occupancy totals", () => {
 		const fixturePath = new URL("./fixtures/cursor-run-usage-compaction-poison.jsonl", import.meta.url);
 		const poisonedMessage = readFileSync(fixturePath, "utf8")
 			.trim()
@@ -235,14 +239,16 @@ describe("cursor usage accounting", () => {
 			cacheWriteTokens: poisonedMessage!.cacheWrite,
 		};
 
-		expect(isCursorSdkUsageSafeForPiMessage(poisonedSdkUsage, model)).toBe(false);
+		expect(isCursorSdkUsageStructurallyValid(poisonedSdkUsage)).toBe(true);
 
 		applyCursorUsage(partial, model, context, 7, { turn: poisonedSdkUsage });
 
-		expect(partial.usage.cacheRead).toBe(0);
-		expect(partial.usage.cacheWrite).toBe(0);
-		expect(partial.usage.input).toBe(7);
+		// Spend may be large (run billing); occupancy must stay estimate-scale.
+		expect(partial.usage.cacheRead).toBe(poisonedMessage!.cacheRead);
+		expect(partial.usage.cacheWrite).toBe(poisonedMessage!.cacheWrite);
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
+		expect(partial.usage.totalTokens).toBeLessThan(1_125_429);
 	});
 
 	it("reads the installed Cursor SDK turn-ended usage update contract", () => {
@@ -289,7 +295,7 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage.totalTokens).toBeLessThan(1_125_429);
 	});
 
-	it("uses turn-ended usage when present", () => {
+	it("uses turn-ended spend when present with estimated occupancy", () => {
 		const model = makeModel();
 		const context: Context = {
 			systemPrompt: "Be helpful.",
@@ -301,8 +307,8 @@ describe("cursor usage accounting", () => {
 			turn: { inputTokens: 25, outputTokens: 6, cacheReadTokens: 24, cacheWriteTokens: 1 },
 		});
 
-		expect(partial.usage).toMatchObject({ input: 0, output: 6, cacheRead: 24, cacheWrite: 1, totalTokens: 31 });
-		expect(partial.usage.input + partial.usage.cacheRead + partial.usage.cacheWrite + partial.usage.output).toBe(31);
+		expect(partial.usage).toMatchObject({ input: 0, output: 6, cacheRead: 24, cacheWrite: 1 });
+		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 	});
 
 	it("keeps the prompt/output estimate fallback when SDK usage is absent", () => {

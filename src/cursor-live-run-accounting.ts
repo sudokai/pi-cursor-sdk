@@ -8,11 +8,6 @@ export interface CursorLiveRunAccountingState {
 	consumedToolResultIds: ReadonlySet<string>;
 	sdkTurnEnded: boolean;
 	sdkTurnUsage?: CursorSdkTurnUsage;
-	/**
-	 * Model invocation count for this run: number of SDK `onStep` steps with
-	 * `type: "assistantMessage"`. Used to detect multi-invocation billing aggregates.
-	 */
-	modelInvocationCount: number;
 }
 
 export interface CursorLiveToolResultConsumption {
@@ -28,7 +23,6 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
 		promptInputTokensReported: false,
 		consumedToolResultIds: new Set(),
 		sdkTurnEnded: false,
-		modelInvocationCount: 0,
 	};
 }
 
@@ -50,14 +44,6 @@ export function recordCursorLiveSdkTurnEnded(
 	sdkTurnUsage?: CursorSdkTurnUsage,
 ): CursorLiveRunAccountingState {
 	return { ...state, sdkTurnEnded: true, sdkTurnUsage };
-}
-
-/**
- * Record one model invocation from an SDK `onStep` `assistantMessage`.
- * Increments `modelInvocationCount` so multi-invocation billing usage can be detected later.
- */
-export function recordCursorLiveModelInvocation(state: CursorLiveRunAccountingState): CursorLiveRunAccountingState {
-	return { ...state, modelInvocationCount: state.modelInvocationCount + 1 };
 }
 
 export function takeCursorLiveSdkTurnUsage(state: CursorLiveRunAccountingState): {

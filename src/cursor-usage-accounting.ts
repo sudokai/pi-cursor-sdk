@@ -21,17 +21,16 @@ export interface CursorUsagePromptOptions extends CursorPromptOptions {
  * - For a **single** model invocation, `inputTokens` is the FULL prompt size (it includes
  *   `cacheReadTokens` / `cacheWriteTokens` as a partition, not an additive extra).
  * - The SDK emits one `turn-ended` per agent **run**. When the run makes multiple model
- *   invocations (`onStep` `assistantMessage` count ≥ 2), those fields are a **billing sum**
- *   across invocations (same totals as the Cursor usage-events CSV). That sum is valid spend
- *   (↑/↓/R/CH) but is **not** context occupancy for the footer or compaction — do not store it
- *   as `usage.totalTokens` when `modelInvocationCount >= 2`.
+ *   invocations, those fields are a **billing sum** across invocations (same totals as the
+ *   Cursor usage-events CSV). That sum is valid **spend** (↑/↓/R/CH) but is never used as
+ *   context occupancy.
  * - The SDK's own `totalTokens` field additionally double-counts cache
  *   (`input+output+cacheRead+cacheWrite`); never copy it into pi.
  * - pi models `usage.input` / `cacheRead` / `cacheWrite` as disjoint additive prompt components,
- *   so `applyCursorSdkUsage` stores the uncached share as `input` (`inputTokens - cacheRead -
- *   cacheWrite`) and keeps the cache fields separately. Occupancy (`usage.totalTokens`) uses
- *   `inputTokens + outputTokens` only for single-invocation runs; multi-invocation runs keep
- *   SDK spend fields but estimate occupancy (see `resolveCursorSdkOccupancyTokens`).
+ *   so spend stores the uncached share as `input` (`inputTokens - cacheRead - cacheWrite`) and
+ *   keeps the cache fields separately.
+ * - **Occupancy** (`usage.totalTokens` for compaction) is always a local context estimate
+ *   (floored at the last accepted assistant occupancy). SDK billing never sets occupancy.
  */
 export interface CursorSdkTurnUsage {
 	/** Full prompt tokens for one invocation, or the summed full-prompt tokens across a multi-invocation run. */
@@ -40,12 +39,6 @@ export interface CursorSdkTurnUsage {
 	cacheReadTokens: number;
 	cacheWriteTokens: number;
 }
-
-/**
- * Count of SDK `onStep` `assistantMessage` events for the run that produced usage.
- * This is the model invocation count used to detect multi-invocation billing aggregates.
- */
-export type CursorSdkModelInvocationCount = number;
 
 function getPromptInputTokenBudget(model: Model<Api>): number {
 	const outputReserveTokens = Math.min(model.maxTokens, Math.max(1, Math.floor(model.contextWindow * 0.2)));
@@ -117,80 +110,20 @@ function getCursorSdkUncachedInputTokens(turnUsage: CursorSdkTurnUsage): number 
 
 /**
  * Cursor usage-events CSV Total Tokens for a turn: full prompt (`inputTokens`) plus output.
- * This is billing spend, not context occupancy, when the run had multiple model invocations.
+ * Billing spend only — never use as context occupancy.
  */
 export function getCursorSdkBillingTotalTokens(turnUsage: CursorSdkTurnUsage): number {
 	return turnUsage.inputTokens + turnUsage.outputTokens;
 }
 
 /**
- * Whether SDK usage is safe to attribute as spend on a pi assistant message.
- * Rejects non-finite/negative fields, invalid cache partitions, and run aggregates that cannot
- * fit in the selected model window (full-agent cumulative poison).
+ * Whether SDK turn usage has a structurally valid spend partition
+ * (finite non-negative fields; cache fields partition `inputTokens`).
  */
-export function isCursorSdkUsageSafeForPiMessage(turnUsage: CursorSdkTurnUsage, model: Model<Api>): boolean {
+export function isCursorSdkUsageStructurallyValid(turnUsage: CursorSdkTurnUsage): boolean {
 	const counts = [turnUsage.inputTokens, turnUsage.outputTokens, turnUsage.cacheReadTokens, turnUsage.cacheWriteTokens];
 	const uncachedInput = getCursorSdkUncachedInputTokens(turnUsage);
-	return (
-		counts.every((count) => Number.isFinite(count) && count >= 0) &&
-		Number.isFinite(uncachedInput) &&
-		uncachedInput >= 0 &&
-		turnUsage.outputTokens <= model.maxTokens &&
-		getCursorSdkBillingTotalTokens(turnUsage) <= model.contextWindow
-	);
-}
-
-/**
- * True when the model invocation count is ≥ 2, so `turn-ended` usage is a multi-invocation
- * billing aggregate rather than one prompt's context occupancy.
- * `0`/`undefined` means steps were not observed — treat as a single model invocation.
- */
-export function isCursorSdkUsageMultiInvocation(modelInvocationCount: CursorSdkModelInvocationCount | undefined): boolean {
-	return typeof modelInvocationCount === "number" && Number.isFinite(modelInvocationCount) && modelInvocationCount >= 2;
-}
-
-/**
- * Resolve context occupancy tokens for the footer and compaction percentage.
- * Single model invocation: SDK billing total (full prompt + output).
- * Multiple model invocations: max of replayable estimate, last accepted occupancy, and
- * per-invocation mean of the billing sum (ceil) — never the raw multi-call billing sum.
- */
-export function resolveCursorSdkOccupancyTokens(
-	partial: AssistantMessage,
-	turnUsage: CursorSdkTurnUsage,
-	model: Model<Api>,
-	context: Context,
-	modelInvocationCount?: CursorSdkModelInvocationCount,
-): number {
-	const billingTotal = getCursorSdkBillingTotalTokens(turnUsage);
-	if (!isCursorSdkUsageMultiInvocation(modelInvocationCount) || modelInvocationCount === undefined) {
-		return billingTotal;
-	}
-	const invocationCount = Math.floor(modelInvocationCount);
-	return Math.max(
-		estimateCursorContextTotalTokens(partial, model, context),
-		getLastAcceptedContextOccupancy(context),
-		Math.ceil(billingTotal / invocationCount),
-	);
-}
-
-/**
- * Map SDK turn usage onto a pi assistant message: spend fields always, context occupancy via
- * `resolveCursorSdkOccupancyTokens` when model/context options are provided.
- */
-export function applyCursorSdkUsage(
-	partial: AssistantMessage,
-	turnUsage: CursorSdkTurnUsage,
-	options?: { model: Model<Api>; context: Context; modelInvocationCount?: CursorSdkModelInvocationCount },
-): void {
-	// Pi treats input/cacheRead/cacheWrite as disjoint additive prompt components (spend).
-	partial.usage.input = getCursorSdkUncachedInputTokens(turnUsage);
-	partial.usage.output = turnUsage.outputTokens;
-	partial.usage.cacheRead = turnUsage.cacheReadTokens;
-	partial.usage.cacheWrite = turnUsage.cacheWriteTokens;
-	partial.usage.totalTokens = options
-		? resolveCursorSdkOccupancyTokens(partial, turnUsage, options.model, options.context, options.modelInvocationCount)
-		: getCursorSdkBillingTotalTokens(turnUsage);
+	return counts.every((count) => Number.isFinite(count) && count >= 0) && Number.isFinite(uncachedInput) && uncachedInput >= 0;
 }
 
 function getLastAcceptedContextOccupancy(context: Context): number {
@@ -200,11 +133,35 @@ function getLastAcceptedContextOccupancy(context: Context): number {
 		const assistant = message as AssistantMessage;
 		if (assistant.stopReason === "aborted" || assistant.stopReason === "error" || !assistant.usage) continue;
 		const { usage } = assistant;
-		const total =
-			usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+		const total = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 		if (Number.isFinite(total) && total > 0) return total;
 	}
 	return 0;
+}
+
+/**
+ * Context occupancy for compaction / `usage.totalTokens`.
+ * Always local estimate, floored at the last accepted assistant occupancy — never SDK billing.
+ */
+export function resolveCursorOccupancyTokens(partial: AssistantMessage, model: Model<Api>, context: Context): number {
+	return Math.max(estimateCursorContextTotalTokens(partial, model, context), getLastAcceptedContextOccupancy(context));
+}
+
+/**
+ * Map SDK turn usage onto a pi assistant message: spend from SDK, occupancy always estimated.
+ */
+export function applyCursorSdkUsage(
+	partial: AssistantMessage,
+	turnUsage: CursorSdkTurnUsage,
+	model: Model<Api>,
+	context: Context,
+): void {
+	// Pi treats input/cacheRead/cacheWrite as disjoint additive prompt components (spend).
+	partial.usage.input = getCursorSdkUncachedInputTokens(turnUsage);
+	partial.usage.output = turnUsage.outputTokens;
+	partial.usage.cacheRead = turnUsage.cacheReadTokens;
+	partial.usage.cacheWrite = turnUsage.cacheWriteTokens;
+	partial.usage.totalTokens = resolveCursorOccupancyTokens(partial, model, context);
 }
 
 export function applyCursorApproximateUsage(partial: AssistantMessage, model: Model<Api>, context: Context, sessionInputTokens: number): void {
@@ -216,8 +173,7 @@ export function applyCursorApproximateUsage(partial: AssistantMessage, model: Mo
 	// Never report less occupancy than the last accepted assistant measurement in this context.
 	partial.usage.totalTokens = Math.max(
 		partial.usage.input + partial.usage.output,
-		estimateCursorContextTotalTokens(partial, model, context),
-		getLastAcceptedContextOccupancy(context),
+		resolveCursorOccupancyTokens(partial, model, context),
 	);
 }
 
@@ -226,15 +182,11 @@ export function applyCursorUsage(
 	model: Model<Api>,
 	context: Context,
 	sessionInputTokens: number,
-	sdkUsage?: { turn?: CursorSdkTurnUsage; modelInvocationCount?: CursorSdkModelInvocationCount },
+	sdkUsage?: { turn?: CursorSdkTurnUsage },
 ): void {
 	const usage = sdkUsage?.turn;
-	if (usage && isCursorSdkUsageSafeForPiMessage(usage, model)) {
-		applyCursorSdkUsage(partial, usage, {
-			model,
-			context,
-			modelInvocationCount: sdkUsage?.modelInvocationCount,
-		});
+	if (usage && isCursorSdkUsageStructurallyValid(usage)) {
+		applyCursorSdkUsage(partial, usage, model, context);
 		return;
 	}
 	applyCursorApproximateUsage(partial, model, context, sessionInputTokens);
