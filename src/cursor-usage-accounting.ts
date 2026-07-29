@@ -17,14 +17,14 @@ export interface CursorUsagePromptOptions extends CursorPromptOptions {
 /**
  * Raw SDK `turn-ended` usage fields.
  *
- * Contract (verified against @cursor/sdk 1.0.23 and the Cursor usage CSV, 2026-07-28/29):
+ * Contract (verified against @cursor/sdk 1.0.23 and the Cursor usage-events CSV):
  * - For a **single** model invocation, `inputTokens` is the FULL prompt size (it includes
  *   `cacheReadTokens` / `cacheWriteTokens` as a partition, not an additive extra).
  * - The SDK emits one `turn-ended` per agent **run**. When the run makes multiple model
  *   invocations (`onStep` `assistantMessage` count ≥ 2), those fields are a **billing sum**
  *   across invocations (same totals as the Cursor usage-events CSV). That sum is valid spend
- *   (↑/↓/R/CH) but is **not** window occupancy — using it as `totalTokens` doubles (or worse)
- *   the footer context % (observed 1×→~32%, 2×→~67% of a 200k window).
+ *   (↑/↓/R/CH) but is **not** context occupancy for the footer or compaction — do not store it
+ *   as `usage.totalTokens` when `modelInvocationCount >= 2`.
  * - The SDK's own `totalTokens` field additionally double-counts cache
  *   (`input+output+cacheRead+cacheWrite`); never copy it into pi.
  * - pi models `usage.input` / `cacheRead` / `cacheWrite` as disjoint additive prompt components,
@@ -41,7 +41,10 @@ export interface CursorSdkTurnUsage {
 	cacheWriteTokens: number;
 }
 
-/** How many SDK `onStep` `assistantMessage` events were observed for the run that produced usage. */
+/**
+ * Count of SDK `onStep` `assistantMessage` events for the run that produced usage.
+ * This is the model invocation count used to detect multi-invocation billing aggregates.
+ */
 export type CursorSdkModelInvocationCount = number;
 
 function getPromptInputTokenBudget(model: Model<Api>): number {
@@ -112,13 +115,16 @@ function getCursorSdkUncachedInputTokens(turnUsage: CursorSdkTurnUsage): number 
 	return turnUsage.inputTokens - turnUsage.cacheReadTokens - turnUsage.cacheWriteTokens;
 }
 
+/**
+ * Cursor usage-events CSV Total Tokens for a turn: full prompt (`inputTokens`) plus output.
+ * This is billing spend, not context occupancy, when the run had multiple model invocations.
+ */
 export function getCursorSdkBillingTotalTokens(turnUsage: CursorSdkTurnUsage): number {
-	// Matches Cursor usage-events CSV Total Tokens: uncached + cache + output = inputTokens + output.
 	return turnUsage.inputTokens + turnUsage.outputTokens;
 }
 
 /**
- * Whether SDK usage is safe to attribute as **spend** on a pi assistant message.
+ * Whether SDK usage is safe to attribute as spend on a pi assistant message.
  * Rejects non-finite/negative fields, invalid cache partitions, and run aggregates that cannot
  * fit in the selected model window (full-agent cumulative poison).
  */
@@ -135,19 +141,19 @@ export function isCursorSdkUsageSafeForPiMessage(turnUsage: CursorSdkTurnUsage, 
 }
 
 /**
- * True when `assistantMessage` steps prove the run made more than one model invocation, so
- * `turn-ended` usage is a billing aggregate rather than one prompt's occupancy.
- * `0`/`undefined` means steps were not observed (tests / direct paths) — treat as single-invocation.
+ * True when the model invocation count is ≥ 2, so `turn-ended` usage is a multi-invocation
+ * billing aggregate rather than one prompt's context occupancy.
+ * `0`/`undefined` means steps were not observed — treat as a single model invocation.
  */
 export function isCursorSdkUsageMultiInvocation(modelInvocationCount: CursorSdkModelInvocationCount | undefined): boolean {
 	return typeof modelInvocationCount === "number" && Number.isFinite(modelInvocationCount) && modelInvocationCount >= 2;
 }
 
 /**
- * Context-window occupancy for footer/compaction. Single-invocation runs use SDK billing total
- * (full prompt + output). Multi-invocation runs must not use the raw billing sum: take the max of
- * the replayable estimate, the last accepted assistant occupancy, and the per-invocation mean of
- * the billing total (ceil) so cold starts do not collapse to a low local estimate.
+ * Resolve context occupancy tokens for the footer and compaction percentage.
+ * Single model invocation: SDK billing total (full prompt + output).
+ * Multiple model invocations: max of replayable estimate, last accepted occupancy, and
+ * per-invocation mean of the billing sum (ceil) — never the raw multi-call billing sum.
  */
 export function resolveCursorSdkOccupancyTokens(
 	partial: AssistantMessage,
@@ -157,10 +163,10 @@ export function resolveCursorSdkOccupancyTokens(
 	modelInvocationCount?: CursorSdkModelInvocationCount,
 ): number {
 	const billingTotal = getCursorSdkBillingTotalTokens(turnUsage);
-	if (!isCursorSdkUsageMultiInvocation(modelInvocationCount)) {
+	if (!isCursorSdkUsageMultiInvocation(modelInvocationCount) || modelInvocationCount === undefined) {
 		return billingTotal;
 	}
-	const invocationCount = Math.floor(modelInvocationCount as number);
+	const invocationCount = Math.floor(modelInvocationCount);
 	return Math.max(
 		estimateCursorContextTotalTokens(partial, model, context),
 		getLastAcceptedContextOccupancy(context),
@@ -168,6 +174,10 @@ export function resolveCursorSdkOccupancyTokens(
 	);
 }
 
+/**
+ * Map SDK turn usage onto a pi assistant message: spend fields always, context occupancy via
+ * `resolveCursorSdkOccupancyTokens` when model/context options are provided.
+ */
 export function applyCursorSdkUsage(
 	partial: AssistantMessage,
 	turnUsage: CursorSdkTurnUsage,

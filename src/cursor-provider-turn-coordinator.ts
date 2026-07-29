@@ -65,7 +65,7 @@ export class CursorSdkTurnCoordinator {
 	private readonly lifecycleEmitter: CursorToolLifecycleEmitter;
 	private readonly contentEmitter;
 	private sdkTurnUsage?: CursorSdkTurnUsage;
-	private assistantMessageCount = 0;
+	private localModelInvocationCount = 0;
 
 	constructor(options: CursorSdkTurnCoordinatorOptions) {
 		this.stream = options.stream;
@@ -111,9 +111,9 @@ export class CursorSdkTurnCoordinator {
 		return this.sdkTurnUsage;
 	}
 
-	/** SDK `onStep` `assistantMessage` count for this provider turn / live run. */
+	/** Model invocation count: SDK `onStep` `assistantMessage` events for this provider turn / live run. */
 	get modelInvocationCount(): number {
-		return this.liveRun?.accounting.assistantMessageCount ?? this.assistantMessageCount;
+		return this.liveRun?.accounting.modelInvocationCount ?? this.localModelInvocationCount;
 	}
 
 	discardIncompleteStartedToolCalls(
@@ -254,8 +254,8 @@ export class CursorSdkTurnCoordinator {
 	handleStep(stepEnvelope: unknown): void {
 		const stepType = getField(stepEnvelope, "type");
 		if (stepType === "assistantMessage") {
-			this.assistantMessageCount += 1;
-			if (this.liveRun) cursorLiveRuns.recordAssistantMessageStep(this.liveRun);
+			this.localModelInvocationCount += 1;
+			if (this.liveRun) cursorLiveRuns.recordModelInvocation(this.liveRun);
 			return;
 		}
 		const step = getField(stepEnvelope, "message") ? stepEnvelope : undefined;

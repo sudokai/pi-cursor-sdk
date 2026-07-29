@@ -107,8 +107,7 @@ describe("cursor usage accounting", () => {
 	});
 
 	it("does not use multi-invocation billing sums as context occupancy", () => {
-		// Captured 2026-07-29 trail-share-studio debug session turn-012 → turn-013:
-		// 1 assistantMessage → occupancy ≈ billing total; 2 assistantMessages → billing ~2×.
+		// Two model invocations: turn-ended billing total is ~2× one prompt; occupancy must not use that sum.
 		const model = { ...makeModel(), contextWindow: 200_000, maxTokens: 64_000 };
 		const prior = makeAssistantMessage([{ type: "text", text: "Prior single-call turn." }]);
 		prior.usage = {
@@ -151,7 +150,7 @@ describe("cursor usage accounting", () => {
 			cacheRead: 127_350,
 			cacheWrite: 0,
 		});
-		// Occupancy must not jump to the 2× billing sum (~67% of 200k).
+		// Context occupancy uses per-invocation mean / last accepted, not the 2× billing sum.
 		expect(partial.usage.totalTokens).toBeLessThan(100_000);
 		expect(partial.usage.totalTokens).toBe(
 			resolveCursorSdkOccupancyTokens(partial, multiInvocationTurn, model, context, 2),
@@ -160,7 +159,7 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage.totalTokens).toBe(Math.ceil(134_157 / 2));
 	});
 
-	it("keeps single-invocation SDK occupancy when assistantMessage count is 0 or 1", () => {
+	it("keeps single-invocation SDK occupancy when model invocation count is 0 or 1", () => {
 		const model = { ...makeModel(), contextWindow: 200_000, maxTokens: 64_000 };
 		const context: Context = {
 			systemPrompt: "Be helpful.",

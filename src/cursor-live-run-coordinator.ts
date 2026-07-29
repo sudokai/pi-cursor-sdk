@@ -3,7 +3,7 @@ import type { SDKAgent } from "@cursor/sdk";
 import {
 	consumeCursorLiveToolResults,
 	createCursorLiveRunAccountingState,
-	recordCursorLiveAssistantMessageStep,
+	recordCursorLiveModelInvocation,
 	recordCursorLiveSdkTurnEnded,
 	takeCursorLiveSdkTurnUsage,
 	takeCursorLiveTurnInputTokens,
@@ -91,7 +91,7 @@ export interface CursorLiveRunCoordinator {
 	markCancelled(run: CursorLiveRun, abortMessage?: string): void;
 	markError(run: CursorLiveRun, errorMessage: string): void;
 	recordSdkTurnEnded(run: CursorLiveRun, usage?: CursorSdkTurnUsage): void;
-	recordAssistantMessageStep(run: CursorLiveRun): void;
+	recordModelInvocation(run: CursorLiveRun): void;
 	hasSdkTurnEnded(run: CursorLiveRun): boolean;
 	/**
 	 * Bounded wait for the SDK `turn-ended` event so its usage is recorded before the run is
@@ -365,9 +365,9 @@ export function createCursorLiveRunCoordinator(deps: CursorLiveRunCoordinatorDep
 			notifyProgress(run);
 		},
 
-		recordAssistantMessageStep(run): void {
+		recordModelInvocation(run): void {
 			if (run.disposed) return;
-			run.accounting = recordCursorLiveAssistantMessageStep(run.accounting);
+			run.accounting = recordCursorLiveModelInvocation(run.accounting);
 		},
 
 		hasSdkTurnEnded(run): boolean {
