@@ -130,6 +130,9 @@ describe("streamCursor connect timeout boundary", () => {
 			expect(error.error.errorMessage).toContain("Network error");
 			expect(error.error.errorMessage).toContain("failed during network or service I/O");
 			expect(rejections).toEqual([]);
+			await vi.waitFor(() => {
+				expect(cursorSdkProcessGuardTestUtils.activeProviderTurnCount()).toBe(0);
+			});
 		} finally {
 			restore();
 		}

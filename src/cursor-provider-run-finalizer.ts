@@ -187,6 +187,7 @@ export class CursorRunFinalizer {
 					outcome.kind === "finished" && hasUsableText(outcome.finalText) ? [outcome.finalText] : [],
 				);
 				applyCursorUsage(partial, model, context, prepared.meta.promptInputTokens, {
+					runtime: prepared.runtimeTarget,
 					turn: prepared.runtime.turnCoordinator.lastSdkTurnUsage,
 				});
 				if (prepared.meta.resumeNotice) emitDisplayOnlyTraceBlock(stream, partial, prepared.meta.resumeNotice);

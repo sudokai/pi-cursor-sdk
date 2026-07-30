@@ -331,7 +331,7 @@ capture_and_require_composer_model() {
 }
 
 run_self_test() {
-	local temp_dir bin_dir fake_pi fake_node fake_node_marker env_capture hostile_path captured_path node_dir name
+	local temp_dir bin_dir fake_pi fake_node fake_node_marker fake_list_pi env_capture hostile_path captured_path node_dir name
 	RG_BIN="$(command -v rg || true)"
 	temp_dir="$(mktemp -d /tmp/pi-cursor-sdk-live-smoke-self-test.XXXXXX)"
 	trap 'rm -rf "$temp_dir"' RETURN

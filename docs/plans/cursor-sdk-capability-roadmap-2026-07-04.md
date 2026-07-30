@@ -1,6 +1,6 @@
 # Cursor SDK capability roadmap
 
-Status: **Active current-state capability ledger and remaining-work plan**. Historical reconciliation baseline: `a2d574b` on 2026-07-18. Implementation status refreshed 2026-07-22 against current source and installed `@cursor/sdk@1.0.23`.
+Status: **Active current-state capability ledger and remaining-work plan**. Historical reconciliation baseline: `a2d574b` on 2026-07-18. Implementation status refreshed 2026-07-29 against current source and installed `@cursor/sdk@1.0.23`.
 
 This document separates landed behavior, open work, deliberate product exclusions, and SDK/API contract gaps. Historical probes are context only; current source, tests, installed SDK types/source, and retained smoke evidence are the acceptance authorities.
 
@@ -104,7 +104,7 @@ Automatic provider startup in print/JSON/RPC does not prompt and fails closed wh
 | Bounded bridge `CallTool` waits | **Implemented** | `src/cursor-pi-tool-bridge-run.ts` caps pending calls at the effective MCP tool timeout with a lower-only override, removes expired requests, and aborts active Pi execution; `test/cursor-pi-tool-bridge-call-timeout.test.ts` covers timeout/cancel lifecycle. |
 | Optional Cursor question prompt | **Implemented** | `PI_CURSOR_ASK_QUESTION=0` removes only `cursor_ask_question` while preserving the rest of the bridge; `src/cursor-question-tool.ts` and registration/bridge tests own the contract. |
 | Automatic local force recovery | **Intentionally deferred/rejected** | Manual `--cursor-local-force` is implemented. Automatic recovery lacks Pi ownership, heartbeat/staleness proof, active-run status, stable idempotency, and cross-handle cleanup guarantees. |
-| Feeding `RunResult.usage` into Pi message/context accounting | **Intentionally deferred/rejected** | Real local evidence showed full-agent-context values that poison compaction. Pi uses valid `turn-ended` usage or bounded estimates; coverage is in usage/provider tests and retained local compaction evidence. |
+| Feeding `RunResult.usage` into Pi message/context accounting | **Intentionally deferred/rejected** | Real local evidence showed full-agent-context values that poison compaction. Pi uses valid local `turn-ended` usage or bounded estimates; cloud raw usage stays display-only until its field semantics are captured. Coverage is in usage/provider tests and retained local compaction evidence. |
 
 ## Prioritized remaining work
 

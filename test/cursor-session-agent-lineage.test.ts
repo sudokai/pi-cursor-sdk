@@ -175,5 +175,4 @@ describe("cursor-session-agent-lineage", () => {
 		recordCursorSessionAgentLineage("agent-2");
 		expect(pi.appendEntry).toHaveBeenCalledTimes(2);
 	});
-
 });

@@ -63,6 +63,7 @@ describe("cursor usage accounting", () => {
 		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
 
 		applyCursorUsage(partial, model, context, 7, {
+			runtime: "local",
 			turn: { inputTokens: 25_432, outputTokens: 612, cacheReadTokens: 24_000, cacheWriteTokens: 123 },
 		});
 
@@ -81,7 +82,8 @@ describe("cursor usage accounting", () => {
 			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
 		};
 		const partial = makeAssistantMessage([{ type: "text", text: "A" }]);
-		// Mirrors live SDK: inputTokens is full prompt; cache fields partition it.
+		// Observed raw local turn-ended.usage (issue #196): inputTokens is full prompt; cache fields partition it.
+		// Distinct from published SDK toTokenUsage additive totalTokens (see turn-ended usage contract fixture).
 		const turn = {
 			inputTokens: 46_965,
 			outputTokens: 3,
@@ -90,7 +92,7 @@ describe("cursor usage accounting", () => {
 		};
 
 		expect(isCursorSdkUsageStructurallyValid(turn)).toBe(true);
-		applyCursorUsage(partial, model, context, 7, { turn });
+		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn });
 		expect(partial.usage).toMatchObject({
 			input: 46_965 - 42_036 - 4_927,
 			output: 3,
@@ -130,7 +132,7 @@ describe("cursor usage accounting", () => {
 
 		expect(getCursorSdkBillingTotalTokens(multiInvocationTurn)).toBe(134_157);
 
-		applyCursorUsage(partial, model, context, 7, { turn: multiInvocationTurn });
+		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: multiInvocationTurn });
 
 		expect(partial.usage).toMatchObject({
 			input: 4_393,
@@ -160,7 +162,7 @@ describe("cursor usage accounting", () => {
 		expect(getCursorSdkBillingTotalTokens(overWindowMulti)).toBeGreaterThan(model.contextWindow);
 		expect(isCursorSdkUsageStructurallyValid(overWindowMulti)).toBe(true);
 
-		applyCursorUsage(partial, model, context, 7, { turn: overWindowMulti });
+		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: overWindowMulti });
 
 		expect(partial.usage).toMatchObject({
 			input: 15_000,
@@ -208,7 +210,7 @@ describe("cursor usage accounting", () => {
 			}),
 		).toBe(false);
 
-		applyCursorUsage(partial, model, context, 7, { turn: overWindowUsage });
+		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: overWindowUsage });
 
 		expect(partial.usage.cacheRead).toBe(9);
 		expect(partial.usage.cacheWrite).toBe(1);
@@ -241,7 +243,7 @@ describe("cursor usage accounting", () => {
 
 		expect(isCursorSdkUsageStructurallyValid(poisonedSdkUsage)).toBe(true);
 
-		applyCursorUsage(partial, model, context, 7, { turn: poisonedSdkUsage });
+		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: poisonedSdkUsage });
 
 		// Spend may be large (run billing); occupancy must stay estimate-scale.
 		expect(partial.usage.cacheRead).toBe(poisonedMessage!.cacheRead);
@@ -260,6 +262,7 @@ describe("cursor usage accounting", () => {
 		expect(TurnEndedUpdateSchema.safeParse(update).success).toBe(true);
 		expect(InteractionUpdateSchema.safeParse(update).success).toBe(true);
 		expect(readCursorSdkTurnUsageFromUpdate(update)).toEqual({ inputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4 });
+		// Published SDK toTokenUsage/sumTokenUsage formula only — not the observed raw local turn-ended mapping.
 		const sdkBundle = readFileSync(createRequire(import.meta.url).resolve("@cursor/sdk"), "utf8");
 		expect(sdkBundle).toMatch(/totalTokens:\w\+\w\+\w\+\w/);
 		expect(calculateContextTokens({
@@ -304,6 +307,7 @@ describe("cursor usage accounting", () => {
 		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
 
 		applyCursorUsage(partial, model, context, 7, {
+			runtime: "local",
 			turn: { inputTokens: 25, outputTokens: 6, cacheReadTokens: 24, cacheWriteTokens: 1 },
 		});
 
@@ -356,5 +360,41 @@ describe("cursor usage accounting", () => {
 		applyCursorUsage(partial, model, context, 7);
 		expect(partial.usage.cacheRead).toBe(0);
 		expect(partial.usage.totalTokens).toBeGreaterThanOrEqual(50_150);
+	});
+
+	it("rejects over-window prior assistant occupancy from the compaction poison fixture", () => {
+		const fixturePath = new URL("./fixtures/cursor-run-usage-compaction-poison.jsonl", import.meta.url);
+		const poisonedAssistant = readFileSync(fixturePath, "utf8")
+			.trim()
+			.split(/\r?\n/)
+			.map((line) => JSON.parse(line) as { message?: AssistantMessage })
+			.find((entry) => entry.message?.role === "assistant")?.message;
+		expect(poisonedAssistant?.usage.totalTokens).toBe(1_132_478);
+
+		// Same api/provider/model as the fixture so rejection is only over-window poison.
+		const model = makeModel("cursor/composer-2-5");
+		expect(poisonedAssistant).toMatchObject({
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+		});
+		expect(poisonedAssistant!.usage.totalTokens).toBeGreaterThan(model.contextWindow);
+
+		const context: Context = {
+			systemPrompt: "Be helpful.",
+			messages: [
+				{ role: "user", content: "Hello", timestamp: 1 },
+				poisonedAssistant!,
+				{ role: "user", content: "Again", timestamp: 3 },
+			],
+		};
+		const partial = makeAssistantMessage([{ type: "text", text: "Hi." }]);
+		partial.model = model.id;
+
+		applyCursorUsage(partial, model, context, 7);
+
+		expect(partial.usage.cacheRead).toBe(0);
+		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
+		expect(partial.usage.totalTokens).not.toBe(1_132_478);
 	});
 });

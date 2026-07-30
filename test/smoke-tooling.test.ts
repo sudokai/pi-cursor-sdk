@@ -193,6 +193,12 @@ try {
 		}
 	});
 
+	it("allows Windows VM tests more scheduling headroom without weakening normal npm test", () => {
+		const windowsBuild = readFileSync("scripts/platform-smoke/platform-build-windows.ps1", "utf8");
+		expect(windowsBuild).toContain("npm.cmd test -- --testTimeout=15000");
+		expect(readFileSync("package.json", "utf8")).toContain('"test": "vitest run"');
+	});
+
 	it("keeps the required HTTP/1.1 live lane explicit", () => {
 		const scenario = getScenario("cursor-http1-live");
 		expect(scenario).toMatchObject({
@@ -223,24 +229,28 @@ const promptOnly = detectCards("1. call pi__read on ./package.json\n2. grep ./RE
 const rendered = detectCards("read /workspace/pi-cursor-sdk/package.json\ngrep /pi-cursor-sdk/ in C:/workspace/README.md\nbridge visual smoke\nENOENT: no such file or directory\ncursor:local · fast:off · http1\ncomposer-2-5\n");
 const wrapped = detectCards("read /workspace/very-long-test-workspace/package.js\non\n");
 const wrappedMidToken = detectCards("read /workspace/very-long-test-workspace/package.j\nson\n");
+const localPreview = detectCards("read package.json · local file preview\n");
 const checks = assertRequiredCards(".", rendered, ["bridge-read-success", "grep", "bridge-shell-success", "bridge-read-failure", "http1-status", "footer-status"]);
 const wrappedChecks = assertRequiredCards(".", wrapped, ["bridge-read-success"]);
 const wrappedMidTokenChecks = assertRequiredCards(".", wrappedMidToken, ["bridge-read-success"]);
+const localPreviewChecks = assertRequiredCards(".", localPreview, ["read"]);
 const result = {
   promptCardCount: promptOnly.length,
   renderedOk: checks.every((check) => check.ok),
   wrappedOk: wrappedChecks.every((check) => check.ok) && wrappedMidTokenChecks.every((check) => check.ok),
+  localPreviewOk: localPreviewChecks.every((check) => check.ok),
   traversalRejected: !isSafeBundlePath("/tmp/platform-smoke-suite", "../outside.txt"),
   absoluteRejected: !isSafeBundlePath("/tmp/platform-smoke-suite", "/tmp/outside.txt"),
   normalAccepted: isSafeBundlePath("/tmp/platform-smoke-suite", "artifacts/terminal.txt"),
 };
 console.log(JSON.stringify(result));
-if (result.promptCardCount !== 0 || !result.renderedOk || !result.wrappedOk || !result.traversalRejected || !result.absoluteRejected || !result.normalAccepted) process.exit(1);
+if (result.promptCardCount !== 0 || !result.renderedOk || !result.wrappedOk || !result.localPreviewOk || !result.traversalRejected || !result.absoluteRejected || !result.normalAccepted) process.exit(1);
 `;
 		const result = run(process.execPath, ["--input-type=module", "-e", code]);
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain('"promptCardCount":0');
 		expect(result.stdout).toContain('"renderedOk":true');
+		expect(result.stdout).toContain('"localPreviewOk":true');
 		expect(result.stdout).toContain('"traversalRejected":true');
 	});
 
@@ -427,6 +437,7 @@ if (!result.allTextIncludesMarker || result.finalText !== "actual final report" 
 
 	it("asserts rendered visual evidence patterns from output lines rather than prompt text", () => {
 		const code = String.raw`
+import { getScenario } from "./scripts/platform-smoke/scenarios.mjs";
 import { findVisualEvidenceItems } from "./scripts/platform-smoke/visual-evidence.mjs";
 const positive = findVisualEvidenceItems([
   "read ./package.json",
@@ -446,14 +457,17 @@ const wrapped = findVisualEvidenceItems([
 ], [
   { id: "read", pattern: "^\\s*read \\./package\\.json", wrappedPattern: "^\\s*read\\s+.*[\\\\/]package\\.(?:json|js\\s+on|j\\s*son)\\s*$" },
 ]);
+const nativeReadSpec = getScenario("cursor-native-visual-matrix").visualEvidence.find((item) => item.id === "native-read-package");
+const localPreview = findVisualEvidenceItems(["read package.json · local file preview"], [nativeReadSpec]);
 const positiveItemsOk = positive.every((item) => item.ok === true);
-console.log(JSON.stringify({ positiveItemsOk, promptOnlyItemOk: promptOnly[0]?.ok ?? null, wrappedItemOk: wrapped[0]?.ok ?? null }));
-if (!positiveItemsOk || promptOnly[0]?.ok !== false || wrapped[0]?.ok !== true) process.exit(1);
+console.log(JSON.stringify({ positiveItemsOk, promptOnlyItemOk: promptOnly[0]?.ok ?? null, wrappedItemOk: wrapped[0]?.ok ?? null, localPreviewItemOk: localPreview[0]?.ok ?? null }));
+if (!positiveItemsOk || promptOnly[0]?.ok !== false || wrapped[0]?.ok !== true || localPreview[0]?.ok !== true) process.exit(1);
 `;
 		const result = run(process.execPath, ["--input-type=module", "-e", code]);
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain('"positiveItemsOk":true');
 		expect(result.stdout).toContain('"promptOnlyItemOk":false');
+		expect(result.stdout).toContain('"localPreviewItemOk":true');
 	});
 
 	it("classifies every Cursor tool presentation surface for platform visual coverage", () => {

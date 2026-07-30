@@ -153,8 +153,13 @@
   },
   "dependencies": {
     "@cursor/sdk": "1.0.23",
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@hono/node-server": "2.0.12",
+    "@modelcontextprotocol/sdk": "1.30.0"
   },
+  "bundledDependencies": [
+    "@hono/node-server",
+    "@modelcontextprotocol/sdk"
+  ],
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",

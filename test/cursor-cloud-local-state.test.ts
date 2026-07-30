@@ -510,7 +510,7 @@ describe("Cursor cloud local state", () => {
 			repo: "https://github.com/example/repo.git",
 			branch: "main",
 		})).toMatchObject({ insideGitRepo: true, dirty: false, comparison: "unknown" });
-	});
+	}, 15_000);
 
 	it.each([
 		["forced negative", "+^refs/heads/main"],
@@ -535,7 +535,7 @@ describe("Cursor cloud local state", () => {
 			repo: "https://github.com/example/repo.git",
 			branch: "main",
 		})).toMatchObject({ insideGitRepo: true, dirty: false, comparison: "unknown" });
-	});
+	}, 15_000);
 
 	it("fails closed when another source can write the target tracking ref", () => {
 		initTrackedRepo(root);

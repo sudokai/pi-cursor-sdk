@@ -165,8 +165,9 @@ Session summaries can hide per-message usage bugs. When investigating token or c
 
 - `usage.input`, `usage.output`, `usage.cacheRead`, and `usage.cacheWrite` are additive spend-style counters for the assistant turn.
 - `usage.totalTokens` is pi context occupancy for that turn, not a value to sum across all assistant messages, and must never be copied from SDK billing totals.
-- Cursor SDK `inputTokens` is the full prompt (or a multi-invocation billing sum); map spend to pi as uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`. Occupancy is always a local context estimate (floored at last accepted), including for single-invocation runs.
-- Over-window or multi-invocation billing spend may still land on the stop message; only occupancy must stay estimate-scale so compaction cannot treat a billing blob as window fill.
+- Distinguish published SDK `TokenUsage` from observed raw local `turn-ended.usage`: the installed SDK's published transform adds all four fields, while captured raw usage keeps `inputTokens` as the full prompt and cache fields partition it. Map raw turn-ended samples to pi as uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`; keep cache fields separately.
+- Cursor SDK `inputTokens` may be a multi-invocation billing sum. Spend may land on the stop message, but occupancy must stay a local context estimate so compaction cannot treat a billing blob as window fill.
+- No single assistant message should persist SDK/full-agent-context-sized occupancy outside the selected model window.
 - Real bad-session evidence should be reduced to a sanitized fixture, like `test/fixtures/cursor-run-usage-compaction-poison.jsonl`, instead of committing raw session JSONL.
 
 The compaction poison fixture mirrors the observed failure shape: one assistant message with `RunResult`-sized input/cache-read counts near 1M immediately before compaction. Regression coverage should prove that occupancy (`totalTokens`) stays bounded even when spend fields reflect large SDK billing.
@@ -433,7 +434,7 @@ rg '"type": "toolCall"|Tool call \(Cursor|cursor-replay-' "$SMOKE_DIR/session"/*
 
 ### When to file follow-ups
 
-- **#43/#107** — pi exited from an uncaught Cursor SDK transport failure (hard crash, not a scrubbed #55 toast). Observed Connect/network/abort shapes remain guarded only during active provider turns; the exact local-turn `write EPIPE` shape is guarded only during active local Cursor provider turns and invalidates only that turn's local agent transport. The exact SDK-provenance `WriteIterableClosedError` is guarded for the Pi session lifecycle because controlled-exec can reject after a turn. Unrelated failures remain fatal, and new exits need stack/session evidence.
+- **#43/#107** — pi exited from an uncaught Cursor SDK transport failure (hard crash, not a scrubbed #55 toast). Observed Connect/network shapes remain guarded only during active provider turns. Raw SDK-provenance `AbortError` DOMExceptions are guarded while a provider turn or session guard is active; the exact local-turn `write EPIPE` shape remains scoped to active local provider turns and invalidates only that turn's local agent transport. The exact SDK-provenance `WriteIterableClosedError` is guarded for the Pi session lifecycle because controlled-exec can reject after a turn. Unrelated failures remain fatal, and new exits need stack/session evidence.
 - **#55** — caught SDK run failure or abort with missing/opaque detail (already addressed on main for surfacing).
 - **#52** — stale/inactive native replay routing after plan-strip or stale `context.tools` snapshot (`Tool * not found` in JSONL, `inactive_trace` in `display-decisions.jsonl`); or maintainer needs an explicit "started X, never completed" debug line when JSONL shows no completion and no model text echo.
 - **New issue** — bridge dispatch failure with `[pi-cursor-sdk:bridge]` evidence, or proven provider bug with JSONL showing missing `toolCall` despite SDK `tool-call-completed` in `on-delta.jsonl` from `debug:provider-events` or `debug:sdk-events` artifacts.

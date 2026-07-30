@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { classifyCursorConnectError, isCursorSdkAbortConnectError, isCursorSdkStalledRepeatedlyError } from "./cursor-provider-errors.js";
+import { classifyCursorConnectError, isCursorSdkAbortConnectError, isCursorSdkConnectionStalledError } from "./cursor-provider-errors.js";
 
 interface CursorSdkProcessErrorGuardToken {
 	suppressAbortErrors: boolean;
@@ -116,8 +116,8 @@ function shouldSuppressProcessError(event: string | symbol, args: readonly unkno
 	// SDK stall timers and inter-turn teardown aborts never call suppressAbortErrors();
 	// any active provider turn or session is enough — stack provenance already gates SDK-only AbortErrors.
 	if (isCursorSdkAbortError(error)) return hasActiveGuard();
-	// RetriableError "Connection stalled repeatedly" is not a ConnectError; suppress during active turns only.
-	if (isCursorSdkStalledRepeatedlyError(error)) return activeProviderTurns.size > 0;
+	// RetriableError "Connection stalled" / "Connection stalled repeatedly" is not a ConnectError; suppress during active turns only.
+	if (isCursorSdkConnectionStalledError(error)) return activeProviderTurns.size > 0;
 	const classification = classifyCursorConnectError(error);
 	if (!classification) return false;
 	if (classification.kind === "abort") return hasActiveAbortSuppression();

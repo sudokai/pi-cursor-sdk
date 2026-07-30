@@ -447,15 +447,23 @@ describe("extension registration and discovery", () => {
 			listenerPayloads.push(payload);
 		});
 		// Re-run once more to prove createEventBus delivery
-		await tool!.execute(
+		const selectAgain = vi.fn().mockResolvedValue("Yes");
+		const deliveryResult = await tool!.execute(
 			"question-2",
 			{ question: "Again?", options: ["Yes"], allowCustom: false },
 			undefined,
 			undefined,
-			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select: vi.fn().mockResolvedValue({ value: "Yes", labeledValue: "Yes" }), input: vi.fn() } }),
+			createExtensionTestContext({ ui: { notify: vi.fn(), setStatus: vi.fn(), select: selectAgain, input: vi.fn() } }),
 		);
 		unsubscribe();
 		expect(listenerPayloads).toEqual([{ active: true }, { active: false }]);
+		expect(selectAgain).toHaveBeenCalledWith("Again?", ["Yes"]);
+		expect(deliveryResult.content).toEqual([{ type: "text", text: "User answered: Yes" }]);
+		expect(deliveryResult.details).toMatchObject({
+			uiAvailable: true,
+			cancelled: false,
+			answers: [{ id: "question_1", answer: "Yes", value: "Yes", cancelled: false }],
+		});
 	});
 
 	it("clears pi-cursor-sdk:ask-question:blocked when the Cursor question UI is cancelled", async () => {
