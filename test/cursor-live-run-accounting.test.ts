@@ -78,8 +78,7 @@ describe("cursor live-run accounting", () => {
 	});
 
 	it("keeps the latest turn-ended usage until taken (never sums)", () => {
-		// Per-turn SDK usage must overwrite, not accumulate: summing double-counts tokens
-		// across turns and inflates usage (see docs/cursor-model-ux-spec.md).
+		// Overwrite, do not accumulate: summing double-counts tokens across events.
 		const afterFirst = recordCursorLiveSdkTurnEnded(
 			createCursorLiveRunAccountingState(100),
 			{ inputTokens: 100, outputTokens: 10, cacheReadTokens: 50, cacheWriteTokens: 5 },

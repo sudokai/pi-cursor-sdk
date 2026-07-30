@@ -331,6 +331,27 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 	});
 
+	it("keeps cloud raw turn-ended usage display-only and falls back to approximate spend", () => {
+		const model = makeModel();
+		const context: Context = {
+			systemPrompt: "Be helpful.",
+			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+		};
+		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
+		const cloudTurn = { inputTokens: 25, outputTokens: 6, cacheReadTokens: 24, cacheWriteTokens: 1 };
+
+		expect(isCursorSdkUsageStructurallyValid(cloudTurn)).toBe(true);
+		applyCursorUsage(partial, model, context, 7, { runtime: "cloud", turn: cloudTurn });
+
+		expect(partial.usage).toMatchObject({
+			input: 7,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+		expect(partial.usage.output).toBe(estimateCursorAssistantSessionOutputTokens(partial));
+		expect(partial.usage.totalTokens).toBe(estimateCursorContextTotalTokens(partial, model, context));
+	});
+
 	it("keeps the prompt/output estimate fallback when SDK usage is absent", () => {
 		const model = makeModel();
 		const context: Context = {

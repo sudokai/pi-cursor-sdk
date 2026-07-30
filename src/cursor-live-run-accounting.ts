@@ -27,16 +27,13 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
 }
 
 /**
- * Records an SDK `turn-ended` usage event. The latest per-turn usage overwrites any
- * pending value (it is never summed): the SDK emits per-turn usage via `toTokenUsage`,
- * and cross-turn summing is a separate opt-in helper (`sumTokenUsage`) that double-counts
- * if applied here. Note the SDK may still deliver **already-aggregated** usage for a
- * multi-invocation run inside that single event — occupancy policy lives in
- * `cursor-usage-accounting.ts`. `turn-ended` is also not carried forward across pi turns:
- * if it arrives after its turn has emitted it belongs to a turn that already fell back to
- * approximate, and applying it to a later turn would mis-attribute usage (see the contract in
- * `docs/cursor-model-ux-spec.md`). The next `takeCursorLiveSdkTurnUsage` consumes the
- * recorded value.
+ * Records an SDK `turn-ended` usage event. The latest value overwrites any pending value
+ * (never summed across events). The SDK emits one `turn-ended` per agent run; multi-invocation
+ * runs may already aggregate billing inside that single event — occupancy policy lives in
+ * `cursor-usage-accounting.ts`. Do not carry usage forward across pi turns: if it arrives
+ * after its turn has emitted, that turn already fell back to approximate, and applying it
+ * later would mis-attribute usage (see `docs/cursor-model-ux-spec.md`). The next
+ * `takeCursorLiveSdkTurnUsage` consumes the recorded value.
  */
 export function recordCursorLiveSdkTurnEnded(
 	state: CursorLiveRunAccountingState,

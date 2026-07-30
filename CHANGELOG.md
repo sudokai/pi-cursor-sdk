@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Stop treating multi-invocation Cursor SDK `turn-ended` billing sums as context-window occupancy: keep CSV-aligned spend fields, count `onStep` `assistantMessage` events, and estimate occupancy (replayable context / last accepted / per-invocation mean) when a run has two or more model invocations so footer context % no longer jumps with the billing aggregate.
+- Apply structurally valid local Cursor SDK `turn-ended` spend without a model-window gate, including multi-invocation billing sums that exceed the selected context window; always set `usage.totalTokens` from a local replayable-context estimate floored at the last accepted compatible same-model in-window assistant measurement so multi-invocation billing no longer inflates footer context % or wipes session cache-hit rate.
 
 ## 0.1.62 - 2026-07-29
 
@@ -15,7 +15,7 @@
 
 ### Fixed
 
-- Suppress Cursor SDK `DOMException [AbortError]` while any provider turn or session guard is active (stall detector / inter-turn timers), and treat installed SDK `RetriableError: Connection stalled repeatedly` as a retryable network failure (#194, #197).
+- Suppress Cursor SDK `DOMException [AbortError]` while any provider turn or session guard is active (stall detector / inter-turn timers), and treat installed SDK `RetriableError: Connection stalled` / `Connection stalled repeatedly` as a retryable network failure (#194, #197).
 - Map observed local Cursor SDK prompt usage into pi-additive spend components (`input = inputTokens - cacheRead - cacheWrite`), reject invalid cache partitions, keep billing totals (`inputTokens + outputTokens`) separate from pi `usage.totalTokens`, and bound occupancy to a replayable-context estimate floored at the last accepted compatible same-model in-window assistant measurement; cloud raw usage remains display-only (#196).
 - Omit invariant Pi system instructions from incremental local Cursor prompts; bootstrap/rebootstrap still send the current system section, and system-prompt changes still force context-divergence bootstrap (#192).
 - Capture `pi --list-models cursor` fully before searching for `composer-2.5` in `smoke:live`, so large catalogs no longer SIGPIPE the prereq under `pipefail`.

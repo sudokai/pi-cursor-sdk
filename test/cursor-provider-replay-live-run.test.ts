@@ -420,7 +420,7 @@ describe("streamCursor native replay live run", () => {
 				},
 			});
 			// Two turn-ended events land in the same drain window. The emitted turn must keep
-			// the LATEST per-turn usage, never the cross-turn sum (regression for 5df250a).
+			// the latest usage, never a cross-event sum.
 			firstOnDelta?.({ update: { type: "turn-ended", usage: { inputTokens: 10_000, outputTokens: 100, cacheReadTokens: 5_000, cacheWriteTokens: 0 } } });
 			firstOnDelta?.({ update: { type: "turn-ended", usage: { inputTokens: 20_000, outputTokens: 200, cacheReadTokens: 10_000, cacheWriteTokens: 0 } } });
 		}, 0);
