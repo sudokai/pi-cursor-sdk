@@ -185,6 +185,22 @@ describe("cursor usage accounting", () => {
 		).toBe(false);
 	});
 
+	it("keeps structural validation separate from model-window occupancy safety", () => {
+		const model = makeModel();
+		const billingSizedTurn = {
+			inputTokens: model.contextWindow + 50_000,
+			outputTokens: model.maxTokens + 1_000,
+			cacheReadTokens: model.contextWindow,
+			cacheWriteTokens: 50_000,
+		};
+
+		// Multi-invocation billing can exceed the selected model window; structural validation
+		// only protects the spend partition, while occupancy remains separately bounded.
+		expect(isCursorSdkUsageStructurallyValid(billingSizedTurn)).toBe(true);
+		expect(isCursorSdkUsageStructurallyValid({ ...billingSizedTurn, outputTokens: -1 })).toBe(false);
+		expect(isCursorSdkUsageStructurallyValid({ ...billingSizedTurn, cacheWriteTokens: 50_001 })).toBe(false);
+	});
+
 	it("applies structurally valid over-window spend and keeps occupancy estimated", () => {
 		const model = makeModel();
 		const context: Context = {

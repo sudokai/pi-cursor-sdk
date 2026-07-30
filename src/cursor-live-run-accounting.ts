@@ -34,8 +34,7 @@ export function createCursorLiveRunAccountingState(promptInputTokens: number): C
  * multi-invocation run inside that single event — occupancy policy lives in
  * `cursor-usage-accounting.ts`. `turn-ended` is also not carried forward across pi turns:
  * if it arrives after its turn has emitted it belongs to a turn that already fell back to
- * approximate, and applying it to a later turn would mis-attribute usage (see
- * `docs/investigations/cursor-live-run-turn-ended-usage-2026-07-27.md` and the contract in
+ * approximate, and applying it to a later turn would mis-attribute usage (see the contract in
  * `docs/cursor-model-ux-spec.md`). The next `takeCursorLiveSdkTurnUsage` consumes the
  * recorded value.
  */

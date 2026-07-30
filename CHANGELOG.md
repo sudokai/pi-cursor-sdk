@@ -16,7 +16,7 @@
 ### Fixed
 
 - Suppress Cursor SDK `DOMException [AbortError]` while any provider turn or session guard is active (stall detector / inter-turn timers), and treat installed SDK `RetriableError: Connection stalled repeatedly` as a retryable network failure (#194, #197).
-- Map observed local Cursor SDK prompt usage into pi-additive components (`input = inputTokens - cacheRead - cacheWrite`) with `totalTokens = inputTokens + outputTokens`, reject invalid cache partitions, and floor approximate occupancy at the last compatible same-model in-window assistant measurement; cloud raw usage remains display-only (#196).
+- Map observed local Cursor SDK prompt usage into pi-additive spend components (`input = inputTokens - cacheRead - cacheWrite`), reject invalid cache partitions, keep billing totals (`inputTokens + outputTokens`) separate from pi `usage.totalTokens`, and bound occupancy to a replayable-context estimate floored at the last accepted compatible same-model in-window assistant measurement; cloud raw usage remains display-only (#196).
 - Omit invariant Pi system instructions from incremental local Cursor prompts; bootstrap/rebootstrap still send the current system section, and system-prompt changes still force context-divergence bootstrap (#192).
 - Capture `pi --list-models cursor` fully before searching for `composer-2.5` in `smoke:live`, so large catalogs no longer SIGPIPE the prereq under `pipefail`.
 - Isolate ambient Git `HOME` and `XDG_CONFIG_HOME` in cloud local-state tests so host `url.*.insteadof` rewrites cannot poison remote-identity probes.
