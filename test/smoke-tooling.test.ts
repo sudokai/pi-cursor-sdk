@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
+import { parseArgs as parsePiArgs } from "../node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js";
+import { buildInitialMessage } from "../node_modules/@earendil-works/pi-coding-agent/dist/cli/initial-message.js";
 import { CURSOR_TOOL_PRESENTATION_SPECS } from "../src/cursor-tool-presentation-registry.js";
-import { getScenario } from "../scripts/platform-smoke/scenarios.mjs";
+import { getScenario, renderPrompt, SCENARIOS } from "../scripts/platform-smoke/scenarios.mjs";
 
 function run(command: string, args: string[], env = process.env, cwd = process.cwd()) {
 	return spawnSync(command, args, { cwd, encoding: "utf8", env, shell: process.platform === "win32" && command === "npm" });
@@ -193,10 +195,60 @@ try {
 		}
 	});
 
-	it("allows Windows VM tests more scheduling headroom without weakening normal npm test", () => {
+	it("allows Windows VM tests more scheduling headroom without weakening normal npm tests", () => {
 		const windowsBuild = readFileSync("scripts/platform-smoke/platform-build-windows.ps1", "utf8");
+		expect(windowsBuild).toContain("npm.cmd run check:platform-smoke -- --testTimeout=15000");
 		expect(windowsBuild).toContain("npm.cmd test -- --testTimeout=15000");
 		expect(readFileSync("package.json", "utf8")).toContain('"test": "vitest run"');
+	});
+
+	it("runs and documents required platform targets sequentially to avoid shared host and API contention", () => {
+		const platformSmoke = readFileSync("scripts/platform-smoke.mjs", "utf8");
+		expect(platformSmoke).toContain("for (const targetName of targets)");
+		expect(platformSmoke).not.toContain("Promise.all(targetRuns)");
+		expect(platformSmoke).toContain("Run one or more comma-separated targets sequentially");
+		const docs = readFileSync("docs/platform-smoke.md", "utf8");
+		expect(docs).toContain("release-gate entrypoint runs required targets sequentially");
+		expect(docs).toContain("Total wall time is therefore additive across required targets");
+	});
+
+	it("passes live prompts through Pi's interactive initial-message contract", () => {
+		const liveRunner = readFileSync("scripts/platform-smoke/live-suite-runner.mjs", "utf8");
+		expect(liveRunner).toContain("`platform-${args.suite}-${Date.now()}`, prompt]");
+		expect(liveRunner).toContain('PI_OFFLINE: "1"');
+		expect(liveRunner).toContain("file: process.execPath, args: [cliEntry, ...args]");
+		expect(liveRunner).toContain("const ptyCommand = ptySpawnCommand(piArgs)");
+		expect(liveRunner).toContain("...ptyCommand");
+		expect(liveRunner).not.toContain("pty-spawn-command.json");
+		expect(liveRunner).not.toContain("child.write(`\\x1b[200~${prompt}");
+		const artifacts = readFileSync("scripts/platform-smoke/artifacts.mjs", "utf8");
+		expect(artifacts).toContain("pi-command\\.json");
+
+		const prompt = "first line\nsecond line: ' \\\" & | ; $() <> `";
+		const parsed = parsePiArgs([
+			"--approve", "--cursor-no-fast", "--cursor-mode", "agent", "--model", "cursor/composer-2-5",
+			"--session-dir", "C:\\smoke sessions", "--session-id", "platform-test", prompt,
+		]);
+		expect(parsed.unknownFlags.get("cursor-no-fast")).toBe(true);
+		expect(parsed.unknownFlags.get("cursor-mode")).toBe("agent");
+		expect(buildInitialMessage({ parsed }).initialMessage).toBe(prompt);
+		expect(parsed.messages).toEqual([]);
+
+		const piArgs = readFileSync("node_modules/@earendil-works/pi-coding-agent/dist/cli/args.js", "utf8");
+		expect(piArgs).toContain("# Interactive mode with initial prompt");
+		expect(piArgs).toContain('${APP_NAME} "List all .ts files in src/"');
+		expect(piArgs).toContain("PI_OFFLINE");
+		expect(piArgs).toContain("Disable startup network operations");
+	});
+
+	it("keeps assistant final markers out of rendered live prompts", () => {
+		for (const scenario of Object.values(SCENARIOS)) {
+			if (!(scenario.finalMarker && scenario.promptTemplate)) continue;
+			const promptScenario = { ...scenario, promptTemplate: scenario.promptTemplate };
+			for (const platform of ["posix", "powershell"] as const) {
+				expect(renderPrompt(promptScenario, platform)).not.toContain(scenario.finalMarker);
+			}
+		}
 	});
 
 	it("keeps the required HTTP/1.1 live lane explicit", () => {

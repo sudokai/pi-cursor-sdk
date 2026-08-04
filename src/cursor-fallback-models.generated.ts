@@ -2992,6 +2992,757 @@ export const FALLBACK_MODEL_ITEMS = [
 		]
 	},
 	{
+		id: "claude-opus-5",
+		displayName: "Opus 5",
+		aliases: [
+			"opus-latest",
+			"opus",
+			"opus-5"
+		],
+		parameters: [
+			{
+				id: "thinking",
+				displayName: "Thinking",
+				values: [
+					{
+						value: "false"
+					},
+					{
+						value: "true"
+					}
+				]
+			},
+			{
+				id: "context",
+				displayName: "Context",
+				values: [
+					{
+						value: "300k",
+						displayName: "300K"
+					},
+					{
+						value: "1m",
+						displayName: "1M"
+					}
+				]
+			},
+			{
+				id: "effort",
+				displayName: "Effort",
+				values: [
+					{
+						value: "low",
+						displayName: "Low"
+					},
+					{
+						value: "medium",
+						displayName: "Medium"
+					},
+					{
+						value: "high",
+						displayName: "High"
+					},
+					{
+						value: "xhigh",
+						displayName: "Extra High"
+					},
+					{
+						value: "max",
+						displayName: "Max"
+					}
+				]
+			},
+			{
+				id: "fast",
+				displayName: "Fast",
+				values: [
+					{
+						value: "false"
+					},
+					{
+						value: "true",
+						displayName: "Fast"
+					}
+				]
+			}
+		],
+		variants: [
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "false"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "xhigh"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "xhigh"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "max"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "300k"
+					},
+					{
+						id: "effort",
+						value: "max"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "low"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "medium"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5",
+				isDefault: true
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "high"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "xhigh"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "xhigh"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "max"
+					},
+					{
+						id: "fast",
+						value: "false"
+					}
+				],
+				displayName: "Opus 5"
+			},
+			{
+				params: [
+					{
+						id: "thinking",
+						value: "true"
+					},
+					{
+						id: "context",
+						value: "1m"
+					},
+					{
+						id: "effort",
+						value: "max"
+					},
+					{
+						id: "fast",
+						value: "true"
+					}
+				],
+				displayName: "Opus 5"
+			}
+		]
+	},
+	{
 		id: "claude-sonnet-4",
 		displayName: "Sonnet 4",
 		aliases: [
@@ -4011,6 +4762,77 @@ export const FALLBACK_MODEL_ITEMS = [
 		]
 	},
 	{
+		id: "gemini-3.6-flash",
+		displayName: "Gemini 3.6 Flash",
+		aliases: [
+			"gemini-flash-latest",
+			"gemini-flash"
+		],
+		parameters: [
+			{
+				id: "effort",
+				displayName: "Effort",
+				values: [
+					{
+						value: "minimal",
+						displayName: "Minimal"
+					},
+					{
+						value: "low",
+						displayName: "Low"
+					},
+					{
+						value: "medium",
+						displayName: "Medium"
+					},
+					{
+						value: "high",
+						displayName: "High"
+					}
+				]
+			}
+		],
+		variants: [
+			{
+				params: [
+					{
+						id: "effort",
+						value: "minimal"
+					}
+				],
+				displayName: "Gemini 3.6 Flash"
+			},
+			{
+				params: [
+					{
+						id: "effort",
+						value: "low"
+					}
+				],
+				displayName: "Gemini 3.6 Flash"
+			},
+			{
+				params: [
+					{
+						id: "effort",
+						value: "medium"
+					}
+				],
+				displayName: "Gemini 3.6 Flash"
+			},
+			{
+				params: [
+					{
+						id: "effort",
+						value: "high"
+					}
+				],
+				displayName: "Gemini 3.6 Flash",
+				isDefault: true
+			}
+		]
+	},
+	{
 		id: "glm-5.2",
 		displayName: "GLM 5.2",
 		parameters: [
@@ -4119,216 +4941,6 @@ export const FALLBACK_MODEL_ITEMS = [
 					}
 				],
 				displayName: "GPT-5.1"
-			}
-		]
-	},
-	{
-		id: "gpt-5.1-codex-max",
-		displayName: "Codex 5.1 Max",
-		aliases: [
-			"codex",
-			"codex-5.1-max"
-		],
-		parameters: [
-			{
-				id: "reasoning",
-				displayName: "Reasoning",
-				values: [
-					{
-						value: "low",
-						displayName: "Low"
-					},
-					{
-						value: "medium",
-						displayName: "Medium"
-					},
-					{
-						value: "high",
-						displayName: "High"
-					},
-					{
-						value: "extra-high",
-						displayName: "Extra High"
-					}
-				]
-			},
-			{
-				id: "fast",
-				displayName: "Fast",
-				values: [
-					{
-						value: "false"
-					},
-					{
-						value: "true",
-						displayName: "Fast"
-					}
-				]
-			}
-		],
-		variants: [
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "low"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "low"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "medium"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "medium"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "high"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "high"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.1 Max",
-				isDefault: true
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "extra-high"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "extra-high"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.1 Max"
-			}
-		]
-	},
-	{
-		id: "gpt-5.1-codex-mini",
-		displayName: "Codex 5.1 Mini",
-		aliases: [
-			"codex-mini-latest",
-			"codex-mini"
-		],
-		parameters: [
-			{
-				id: "reasoning",
-				displayName: "Reasoning",
-				values: [
-					{
-						value: "low",
-						displayName: "Low"
-					},
-					{
-						value: "medium",
-						displayName: "Medium"
-					},
-					{
-						value: "high",
-						displayName: "High"
-					}
-				]
-			}
-		],
-		variants: [
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "low"
-					}
-				],
-				displayName: "Codex 5.1 Mini"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "medium"
-					}
-				],
-				displayName: "Codex 5.1 Mini",
-				isDefault: true
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "high"
-					}
-				],
-				displayName: "Codex 5.1 Mini"
 			}
 		]
 	},
@@ -4480,158 +5092,6 @@ export const FALLBACK_MODEL_ITEMS = [
 					}
 				],
 				displayName: "GPT-5.2"
-			}
-		]
-	},
-	{
-		id: "gpt-5.2-codex",
-		displayName: "Codex 5.2",
-		aliases: [
-			"codex",
-			"codex-5.2"
-		],
-		parameters: [
-			{
-				id: "reasoning",
-				displayName: "Reasoning",
-				values: [
-					{
-						value: "low",
-						displayName: "Low"
-					},
-					{
-						value: "medium",
-						displayName: "Medium"
-					},
-					{
-						value: "high",
-						displayName: "High"
-					},
-					{
-						value: "extra-high",
-						displayName: "Extra High"
-					}
-				]
-			},
-			{
-				id: "fast",
-				displayName: "Fast",
-				values: [
-					{
-						value: "false"
-					},
-					{
-						value: "true",
-						displayName: "Fast"
-					}
-				]
-			}
-		],
-		variants: [
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "low"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.2"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "low"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.2"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "medium"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.2"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "medium"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.2"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "high"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.2"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "high"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.2",
-				isDefault: true
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "extra-high"
-					},
-					{
-						id: "fast",
-						value: "false"
-					}
-				],
-				displayName: "Codex 5.2"
-			},
-			{
-				params: [
-					{
-						id: "reasoning",
-						value: "extra-high"
-					},
-					{
-						id: "fast",
-						value: "true"
-					}
-				],
-				displayName: "Codex 5.2"
 			}
 		]
 	},
@@ -6853,6 +7313,60 @@ export const FALLBACK_MODEL_ITEMS = [
 			{
 				params: [],
 				displayName: "Kimi K2.7 Code",
+				isDefault: true
+			}
+		]
+	},
+	{
+		id: "kimi-k3",
+		displayName: "Kimi K3",
+		parameters: [
+			{
+				id: "reasoning",
+				displayName: "Reasoning",
+				values: [
+					{
+						value: "low",
+						displayName: "Low"
+					},
+					{
+						value: "high",
+						displayName: "High"
+					},
+					{
+						value: "max",
+						displayName: "Max"
+					}
+				]
+			}
+		],
+		variants: [
+			{
+				params: [
+					{
+						id: "reasoning",
+						value: "low"
+					}
+				],
+				displayName: "Kimi K3"
+			},
+			{
+				params: [
+					{
+						id: "reasoning",
+						value: "high"
+					}
+				],
+				displayName: "Kimi K3"
+			},
+			{
+				params: [
+					{
+						id: "reasoning",
+						value: "max"
+					}
+				],
+				displayName: "Kimi K3",
 				isDefault: true
 			}
 		]

@@ -62,7 +62,7 @@ Write-SectionFile "NPM_CI_STDOUT" $NpmCiOut
 Write-SectionFile "NPM_CI_STDERR" $NpmCiErr
 
 Write-Output "=== check:platform-smoke ==="
-& npm.cmd run check:platform-smoke 1> $CheckPlatformSmokeOut 2> $CheckPlatformSmokeErr
+& npm.cmd run check:platform-smoke -- --testTimeout=15000 1> $CheckPlatformSmokeOut 2> $CheckPlatformSmokeErr
 $CHECK_PLATFORM_SMOKE_EXIT = Exit-CodeFromLastCommand
 Write-Output "PLATFORM_CHECK_PLATFORM_SMOKE_EXIT=$CHECK_PLATFORM_SMOKE_EXIT"
 Write-SectionFile "CHECK_PLATFORM_SMOKE_STDOUT" $CheckPlatformSmokeOut

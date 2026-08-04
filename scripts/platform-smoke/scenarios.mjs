@@ -108,7 +108,7 @@ NATIVE_MATRIX_OK package=<name> grep=<yes/no> find=<yes/no> list=<yes/no> shell=
 			PI_CURSOR_EXPOSE_BUILTIN_TOOLS: "0",
 			PI_CURSOR_SDK_EVENT_DEBUG: "1",
 		},
-		promptTemplate: "Reply exactly HTTP1_LIVE_OK.",
+		promptTemplate: "Join HTTP1, LIVE, and OK with underscores and reply with only the result.",
 		finalMarker: "HTTP1_LIVE_OK",
 		requiredCards: ["http1-status"],
 	},

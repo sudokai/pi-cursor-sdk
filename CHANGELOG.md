@@ -2,8 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- Add a dated, hash-verified evidence bundle for Cursor's persisted system messages and reconstructed tool guidance for Grok 4.5, Claude Opus/Fable 5, and GPT-5.6 Sol/Terra/Luna.
+
+### Changed
+
+- Refresh the 34-model Cursor fallback catalog and checkpoint-derived context-window snapshot from the live `@cursor/sdk` 1.0.23 runtime.
+
 ### Fixed
 
+- Normalize checkpoint context-window keys to current selectable model identities, collapse redundant default `:fast`/`:slow` aliases, reject conflicting equivalent selections, remove stale or ambiguous aliases, and reuse base-model context evidence for unobserved equivalent aliases.
+- Give Windows platform-build checks the same 15-second Vitest scheduling headroom as the full Windows test run, while preserving normal local test timeouts.
+- Pass live PTY smoke prompts as direct Node argv through Pi's interactive initial-message contract, isolate unrelated startup probes with `PI_OFFLINE=1`, and keep final markers out of prompt echoes.
+- Run required platform targets sequentially so concurrent VM/container load and Cursor API calls cannot starve otherwise healthy smoke lanes.
 - Apply structurally valid local Cursor SDK `turn-ended` spend without a model-window gate, including multi-invocation billing sums that exceed the selected context window; always set `usage.totalTokens` from a local replayable-context estimate floored at the last accepted compatible same-model in-window assistant measurement so multi-invocation billing no longer inflates footer context % or wipes session cache-hit rate.
 
 ## 0.1.62 - 2026-07-29
