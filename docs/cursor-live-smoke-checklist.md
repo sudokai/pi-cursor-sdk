@@ -90,7 +90,7 @@ Pass criteria:
 - Exit code is `0`.
 - stdout contains `PI_CURSOR_SMOKE_OK`.
 - stderr is empty or contains only expected non-secret diagnostics for the specific test.
-- The persisted JSONL has exactly one assistant message with non-negative usage fields and non-negative `cacheRead/cacheWrite`.
+- The persisted JSONL has exactly one assistant message with non-negative usage fields; `cacheRead/cacheWrite` are zeroed on emitted pi usage (SDK cache billing rides on the `usage.cursorSdk` carrier).
 
 ## 2. Default setting-source startup noise check
 
@@ -346,7 +346,7 @@ Script-enforced pass criteria:
 - Every scanned JSONL file contains at least one assistant message.
 - Every assistant message has usage metadata.
 - Assistant usage `input`, `output`, and `totalTokens` are non-negative numbers.
-- Assistant usage `cacheRead` and `cacheWrite` are non-negative when present.
+- Assistant usage `cacheRead` and `cacheWrite` are zero (SDK cache billing is a billing sum across invocations, carried on `usage.cursorSdk`).
 
 Additional manual usage checks for provider/accounting changes:
 

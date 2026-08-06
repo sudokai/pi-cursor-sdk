@@ -1,4 +1,4 @@
-import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Context, Model, Usage } from "@earendil-works/pi-ai";
 import {
 	CURSOR_APPROX_CHARS_PER_TOKEN,
 	CURSOR_IMAGE_TOKEN_ESTIMATE,
@@ -138,6 +138,17 @@ export function resolveCursorOccupancyTokens(partial: AssistantMessage, model: M
 	return Math.max(estimateCursorContextTotalTokens(partial, model, context), getLastAcceptedContextOccupancy(context, model));
 }
 
+/**
+ * Real SDK `turn-ended` billing carried alongside pi usage on a host-ignored
+ * custom field. The Cursor SDK emits one `turn-ended` per agent run whose usage
+ * is a billing sum across invocations (verified against the Cursor usage-events
+ * CSV); it is valid spend but never context occupancy, so pi-cursor-sdk keeps it
+ * here for its own accounting instead of exposing it on overflow-visible fields.
+ */
+export interface CursorSdkUsageCarrier {
+	cursorSdk?: CursorSdkTurnUsage;
+}
+
 /** Map local SDK spend onto pi while keeping occupancy a local estimate. */
 export function applyCursorSdkUsage(
 	partial: AssistantMessage,
@@ -145,11 +156,23 @@ export function applyCursorSdkUsage(
 	model: Model<Api>,
 	context: Context,
 ): void {
-	partial.usage.input = getCursorSdkUncachedInputTokens(turnUsage);
+	// The SDK's turn-ended usage is a billing sum across invocations in the run,
+	// never context occupancy. pi-ai's silent-overflow check reads `input + cacheRead`
+	// as prompt size, so keep the overflow-visible fields occupancy-safe (uncached
+	// input capped at the prompt budget, cache fields zero) and carry the real SDK
+	// billing on the host-ignored `cursorSdk` field instead.
+	const maxInputTokens = getCursorPromptOptions(model).maxInputTokens;
+	partial.usage.input = Math.min(getCursorSdkUncachedInputTokens(turnUsage), maxInputTokens);
 	partial.usage.output = turnUsage.outputTokens;
-	partial.usage.cacheRead = turnUsage.cacheReadTokens;
-	partial.usage.cacheWrite = turnUsage.cacheWriteTokens;
+	partial.usage.cacheRead = 0;
+	partial.usage.cacheWrite = 0;
 	partial.usage.totalTokens = resolveCursorOccupancyTokens(partial, model, context);
+	(partial.usage as Usage & CursorSdkUsageCarrier).cursorSdk = {
+		inputTokens: turnUsage.inputTokens,
+		outputTokens: turnUsage.outputTokens,
+		cacheReadTokens: turnUsage.cacheReadTokens,
+		cacheWriteTokens: turnUsage.cacheWriteTokens,
+	};
 }
 
 export function applyCursorApproximateUsage(partial: AssistantMessage, model: Model<Api>, context: Context, sessionInputTokens: number): void {

@@ -93,8 +93,13 @@ describe("streamCursor usage accounting", () => {
 
 		expect(done.message.usage.input).toBe(25_432 - 24_000 - 123);
 		expect(done.message.usage.output).toBe(612);
-		expect(done.message.usage.cacheRead).toBe(24_000);
-		expect(done.message.usage.cacheWrite).toBe(123);
+		// SDK billing sums stay off the overflow-visible pi fields (carried on cursorSdk).
+		expect(done.message.usage.cacheRead).toBe(0);
+		expect(done.message.usage.cacheWrite).toBe(0);
+		expect((done.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
+			cacheReadTokens: 24_000,
+			cacheWriteTokens: 123,
+		});
 		expect(done.message.usage.totalTokens).toBeGreaterThan(0);
 		expect(done.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
 	});
@@ -128,10 +133,16 @@ describe("streamCursor usage accounting", () => {
 		const events = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
 		const done = getDoneEvent(events);
 
-		expect(done.message.usage.cacheRead).toBe(1_015_493);
+		expect(done.message.usage.cacheRead).toBe(0);
 		expect(done.message.usage.cacheWrite).toBe(0);
+		expect((done.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
+			cacheReadTokens: 1_015_493,
+			cacheWriteTokens: 0,
+		});
 		expect(done.message.usage.input).toBe(1_125_429 - 1_015_493);
 		expect(done.message.usage.output).toBe(7_049);
+		// pi-ai silent-overflow invariant: input + cacheRead must never exceed the window.
+		expect(done.message.usage.input + done.message.usage.cacheRead).toBeLessThanOrEqual(makeModel().contextWindow);
 		expect(done.message.usage.totalTokens).toBeLessThan(1_125_429);
 		expect(done.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
 	});

@@ -132,6 +132,10 @@ describe("installed Cursor SDK turn-ended usage contract", () => {
 			const partial = makeAssistantMessage();
 			applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: turn! });
 			expect(partial.usage).toMatchObject(fixture.expectedPiMappingFromRawTurnEnded[index]!);
+			// The real SDK billing survives on the host-ignored cursorSdk carrier.
+			expect((partial.usage as AssistantMessage["usage"] & { cursorSdk?: typeof sample.usage }).cursorSdk).toEqual(
+				sample.usage,
+			);
 			expect(partial.usage.totalTokens).toBe(estimateCursorContextTotalTokens(partial, model, context));
 			// Explicitly reject the published SDK additive total for raw local turn-ended samples.
 			const publishedAdditiveTotal =

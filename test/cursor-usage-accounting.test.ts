@@ -14,6 +14,7 @@ import {
 	readCursorSdkTurnUsage,
 	readCursorSdkTurnUsageFromUpdate,
 	resolveCursorOccupancyTokens,
+	type CursorSdkUsageCarrier,
 } from "../src/cursor-usage-accounting.js";
 import { makeModel } from "./helpers/pi-harness.js";
 
@@ -35,6 +36,10 @@ function makeAssistantMessage(content: AssistantMessage["content"]): AssistantMe
 		stopReason: "stop",
 		timestamp: 2,
 	};
+}
+
+function sdkUsageOf(partial: AssistantMessage): CursorSdkUsageCarrier["cursorSdk"] {
+	return (partial.usage as AssistantMessage["usage"] & CursorSdkUsageCarrier).cursorSdk;
 }
 
 describe("cursor usage accounting", () => {
@@ -69,8 +74,17 @@ describe("cursor usage accounting", () => {
 
 		expect(partial.usage.input).toBe(25_432 - 24_000 - 123);
 		expect(partial.usage.output).toBe(612);
-		expect(partial.usage.cacheRead).toBe(24_000);
-		expect(partial.usage.cacheWrite).toBe(123);
+		// SDK turn-ended usage is a billing sum across invocations, never context
+		// occupancy: keep the overflow-visible pi fields occupancy-safe and carry
+		// real spend on the host-ignored cursorSdk field.
+		expect(partial.usage.cacheRead).toBe(0);
+		expect(partial.usage.cacheWrite).toBe(0);
+		expect(sdkUsageOf(partial)).toEqual({
+			inputTokens: 25_432,
+			outputTokens: 612,
+			cacheReadTokens: 24_000,
+			cacheWriteTokens: 123,
+		});
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).not.toBe(25_432 + 612);
 	});
@@ -96,8 +110,14 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage).toMatchObject({
 			input: 46_965 - 42_036 - 4_927,
 			output: 3,
-			cacheRead: 42_036,
-			cacheWrite: 4_927,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+		expect(sdkUsageOf(partial)).toEqual({
+			inputTokens: 46_965,
+			outputTokens: 3,
+			cacheReadTokens: 42_036,
+			cacheWriteTokens: 4_927,
 		});
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 	});
@@ -137,9 +157,16 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage).toMatchObject({
 			input: 4_393,
 			output: 2_414,
-			cacheRead: 127_350,
+			cacheRead: 0,
 			cacheWrite: 0,
 		});
+		expect(sdkUsageOf(partial)).toEqual({
+			inputTokens: 131_743,
+			outputTokens: 2_414,
+			cacheReadTokens: 127_350,
+			cacheWriteTokens: 0,
+		});
+		expect(partial.usage.input + partial.usage.cacheRead).toBeLessThanOrEqual(model.contextWindow);
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeGreaterThanOrEqual(64_387);
 		expect(partial.usage.totalTokens).toBeLessThan(getCursorSdkBillingTotalTokens(multiInvocationTurn));
@@ -167,9 +194,16 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage).toMatchObject({
 			input: 15_000,
 			output: 3_000,
-			cacheRead: 200_000,
-			cacheWrite: 5_000,
+			cacheRead: 0,
+			cacheWrite: 0,
 		});
+		expect(sdkUsageOf(partial)).toEqual({
+			inputTokens: 220_000,
+			outputTokens: 3_000,
+			cacheReadTokens: 200_000,
+			cacheWriteTokens: 5_000,
+		});
+		expect(partial.usage.input + partial.usage.cacheRead).toBeLessThanOrEqual(model.contextWindow);
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
 	});
@@ -228,8 +262,9 @@ describe("cursor usage accounting", () => {
 
 		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: overWindowUsage });
 
-		expect(partial.usage.cacheRead).toBe(9);
-		expect(partial.usage.cacheWrite).toBe(1);
+		expect(partial.usage.cacheRead).toBe(0);
+		expect(partial.usage.cacheWrite).toBe(0);
+		expect(sdkUsageOf(partial)).toMatchObject({ cacheReadTokens: 9, cacheWriteTokens: 1 });
 		expect(partial.usage.output).toBe(11);
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
@@ -262,8 +297,15 @@ describe("cursor usage accounting", () => {
 		applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: poisonedSdkUsage });
 
 		// Spend may be large (run billing); occupancy must stay estimate-scale.
-		expect(partial.usage.cacheRead).toBe(poisonedMessage!.cacheRead);
-		expect(partial.usage.cacheWrite).toBe(poisonedMessage!.cacheWrite);
+		// The large cache-read billing must not leak onto the overflow-visible pi
+		// fields (pi-ai treats input+cacheRead as prompt size); it stays on cursorSdk.
+		expect(partial.usage.cacheRead).toBe(0);
+		expect(partial.usage.cacheWrite).toBe(0);
+		expect(sdkUsageOf(partial)).toMatchObject({
+			cacheReadTokens: poisonedMessage!.cacheRead,
+			cacheWriteTokens: poisonedMessage!.cacheWrite,
+		});
+		expect(partial.usage.input + partial.usage.cacheRead).toBeLessThanOrEqual(model.contextWindow);
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
 		expect(partial.usage.totalTokens).toBeLessThan(1_125_429);
@@ -327,7 +369,13 @@ describe("cursor usage accounting", () => {
 			turn: { inputTokens: 25, outputTokens: 6, cacheReadTokens: 24, cacheWriteTokens: 1 },
 		});
 
-		expect(partial.usage).toMatchObject({ input: 0, output: 6, cacheRead: 24, cacheWrite: 1 });
+		expect(partial.usage).toMatchObject({ input: 0, output: 6, cacheRead: 0, cacheWrite: 0 });
+		expect(sdkUsageOf(partial)).toEqual({
+			inputTokens: 25,
+			outputTokens: 6,
+			cacheReadTokens: 24,
+			cacheWriteTokens: 1,
+		});
 		expect(partial.usage.totalTokens).toBe(resolveCursorOccupancyTokens(partial, model, context));
 	});
 
@@ -433,5 +481,47 @@ describe("cursor usage accounting", () => {
 		expect(partial.usage.cacheRead).toBe(0);
 		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
 		expect(partial.usage.totalTokens).not.toBe(1_132_478);
+	});
+
+	it("keeps pi-ai silent-overflow detection inactive for SDK-shaped billing sums", () => {
+		// Regression: a real Cursor session's turn-ended usage is a billing sum across
+		// invocations (observed cacheReadTokens 1.7M+ on a 200k-window model). pi-ai's
+		// isContextOverflow Case 2 treats `input + cacheRead` as prompt size; if SDK
+		// billing leaked onto those fields, every healthy turn looked like overflow and
+		// prime-agent auto-compacted once per turn. The overflow-visible fields must
+		// stay occupancy-safe (input capped, cacheRead/cacheWrite zero) while the real
+		// billing rides on the host-ignored cursorSdk field.
+		const model = makeModel();
+		const context: Context = {
+			systemPrompt: "Be helpful.",
+			messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+		};
+		const partial = makeAssistantMessage([{ type: "text", text: "Hello back." }]);
+
+		// Observed assistant 24d9e9c5 in the prime-agent session that auto-compacted
+		// five times: totalTokens (occupancy) 15,702; cacheRead billing 1,768,042.
+		applyCursorUsage(partial, model, context, 7, {
+			runtime: "local",
+			turn: {
+				inputTokens: 1_795_383,
+				outputTokens: 5_516,
+				cacheReadTokens: 1_768_042,
+				cacheWriteTokens: 0,
+			},
+		});
+
+		// pi-ai isContextOverflow Case 2: `input + cacheRead > contextWindow` => overflow.
+		// Must stay false; cacheRead is zero and input is capped at the prompt budget.
+		expect(partial.usage.input + partial.usage.cacheRead).toBeLessThanOrEqual(model.contextWindow);
+		expect(partial.usage.cacheRead).toBe(0);
+		expect(partial.usage.cacheWrite).toBe(0);
+		expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
+		// Real spend is preserved on the host-ignored cursorSdk carrier.
+		expect(sdkUsageOf(partial)).toEqual({
+			inputTokens: 1_795_383,
+			outputTokens: 5_516,
+			cacheReadTokens: 1_768_042,
+			cacheWriteTokens: 0,
+		});
 	});
 });

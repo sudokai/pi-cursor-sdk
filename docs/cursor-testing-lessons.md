@@ -163,9 +163,9 @@ Successful tool results are ignored even when file contents mention those string
 
 Session summaries can hide per-message usage bugs. When investigating token or compaction regressions, inspect assistant message `usage` rows directly:
 
-- `usage.input`, `usage.output`, `usage.cacheRead`, and `usage.cacheWrite` are additive spend-style counters for the assistant turn.
+- `usage.input` and `usage.output` are additive spend-style counters for the assistant turn. `usage.cacheRead`/`usage.cacheWrite` on emitted pi messages are **zeroed**: SDK `turn-ended` cache fields are billing sums across invocations (verified against the Cursor usage-events CSV), never context occupancy, and pi-ai's silent-overflow check reads `input + cacheRead` as prompt size. Real SDK billing rides on the host-ignored `usage.cursorSdk` carrier (`{ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`).
 - `usage.totalTokens` is pi context occupancy for that turn, not a value to sum across all assistant messages, and must never be copied from SDK billing totals.
-- Distinguish published SDK `TokenUsage` from observed raw local `turn-ended.usage`: the installed SDK's published transform adds all four fields, while captured raw usage keeps `inputTokens` as the full prompt and cache fields partition it. Map raw turn-ended samples to pi as uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`; keep cache fields separately.
+- Distinguish published SDK `TokenUsage` from observed raw local `turn-ended.usage`: the installed SDK's published transform adds all four fields, while captured raw usage keeps `inputTokens` as the full prompt and cache fields partition it. Map raw turn-ended samples to pi as uncapped-uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`; keep the raw cache billing on `usage.cursorSdk`.
 - Cursor SDK `inputTokens` may be a multi-invocation billing sum. Spend may land on the stop message, but occupancy must stay a local context estimate so compaction cannot treat a billing blob as window fill.
 - No single assistant message should persist SDK/full-agent-context-sized occupancy outside the selected model window.
 - Real bad-session evidence should be reduced to a sanitized fixture, like `test/fixtures/cursor-run-usage-compaction-poison.jsonl`, instead of committing raw session JSONL.

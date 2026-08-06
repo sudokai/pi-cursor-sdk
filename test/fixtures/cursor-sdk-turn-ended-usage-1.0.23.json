@@ -8,7 +8,8 @@
     "notes": [
       "Official TypeScript SDK docs and installed usage-types toTokenUsage treat TokenUsage.totalTokens as inputTokens+outputTokens+cacheReadTokens+cacheWriteTokens (additive fields).",
       "Observed raw local turn-ended.usage keeps inputTokens as the full prompt (nearly flat across turns) while cacheReadTokens/cacheWriteTokens partition that prompt.",
-      "pi-cursor-sdk maps raw turn-ended.usage, not SDK toTokenUsage: input = inputTokens-cacheRead-cacheWrite; occupancy totalTokens is estimated from replayable local context."
+      "pi-cursor-sdk maps raw turn-ended.usage, not SDK toTokenUsage: input = inputTokens-cacheRead-cacheWrite; occupancy totalTokens is estimated from replayable local context.",
+      "Mapping update: SDK cacheReadTokens/cacheWriteTokens are billing sums across invocations (never context occupancy). pi-ai's silent-overflow check reads usage.input + usage.cacheRead as prompt size, so pi-cursor-sdk zeroes the overflow-visible pi cache fields and carries the real SDK billing on the host-ignored usage.cursorSdk carrier."
     ]
   },
   "installedSdkPublishedTransform": {
@@ -44,13 +45,13 @@
       "input": 2,
       "output": 3,
       "cacheRead": 0,
-      "cacheWrite": 46944
+      "cacheWrite": 0
     },
     {
       "input": 2,
       "output": 3,
-      "cacheRead": 42036,
-      "cacheWrite": 4927
+      "cacheRead": 0,
+      "cacheWrite": 0
     }
   ],
   "runtimeDivergenceEvidence": {

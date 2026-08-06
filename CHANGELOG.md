@@ -12,6 +12,8 @@
 
 ### Fixed
 
+- Prevent false-positive context-overflow compactions under pi/prime-agent by keeping SDK `turn-ended` cache billing off the overflow-visible pi usage fields. The Cursor SDK emits one `turn-ended` per run whose `cacheReadTokens`/`cacheWriteTokens` are a billing sum across invocations (verified against the Cursor usage-events CSV) — valid spend, never context occupancy. pi-ai's silent-overflow check treats `usage.input + usage.cacheRead` as prompt size, so large cache-read billing made every healthy turn look like a 200k+ token overflow and prime-agent auto-compacted roughly once per turn. `applyCursorSdkUsage` now caps uncached `usage.input` at the prompt budget, zeroes `usage.cacheRead`/`usage.cacheWrite`, keeps occupancy in `usage.totalTokens` (unchanged), and carries the real SDK billing on the host-ignored `usage.cursorSdk` carrier (`{ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`). Regression coverage asserts the `input + cacheRead <= contextWindow` invariant that pi-ai Case 2 checks.
+
 - Normalize checkpoint context-window keys to current selectable model identities, collapse redundant default `:fast`/`:slow` aliases, reject conflicting equivalent selections, remove stale or ambiguous aliases, and reuse base-model context evidence for unobserved equivalent aliases.
 - Give Windows platform-build checks the same 15-second Vitest scheduling headroom as the full Windows test run, while preserving normal local test timeouts.
 - Pass live PTY smoke prompts as direct Node argv through Pi's interactive initial-message contract, isolate unrelated startup probes with `PI_OFFLINE=1`, and keep final markers out of prompt echoes.
