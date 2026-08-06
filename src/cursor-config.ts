@@ -16,6 +16,11 @@ import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { parseOptionalEnvBoolean } from "./cursor-env-boolean.js";
 import { asRecord } from "./cursor-record-utils.js";
 
+// pi exports CONFIG_DIR_NAME (".pi"); prime-agent does not export it. Fall back
+// to prime-agent's agent config dir so project-level cursor-sdk.json lands in
+// the same tree as the running agent runtime.
+const CURSOR_PROJECT_CONFIG_DIR_NAME: string = CONFIG_DIR_NAME ?? ".prime/agent";
+
 export const CURSOR_SDK_CONFIG_FILE = "cursor-sdk.json";
 
 export const CURSOR_RUNTIME_ENV = "PI_CURSOR_RUNTIME";
@@ -292,7 +297,7 @@ export function getCursorSdkUserConfigPath(agentDir = getAgentDir()): string {
 	return join(agentDir, CURSOR_SDK_CONFIG_FILE);
 }
 
-export function getCursorSdkProjectConfigPath(cwd: string, configDirName = CONFIG_DIR_NAME): string {
+export function getCursorSdkProjectConfigPath(cwd: string, configDirName = CURSOR_PROJECT_CONFIG_DIR_NAME): string {
 	return join(cwd, configDirName, CURSOR_SDK_CONFIG_FILE);
 }
 
@@ -422,7 +427,7 @@ export function saveCursorSdkUserConfig(config: CursorSdkConfig, path = getCurso
 	updateCursorSdkConfig(path, () => ({ ...config }), { newFileMode: 0o600 });
 }
 
-export function saveCursorSdkProjectConfig(cwd: string, config: CursorSdkConfig, configDirName = CONFIG_DIR_NAME): void {
+export function saveCursorSdkProjectConfig(cwd: string, config: CursorSdkConfig, configDirName = CURSOR_PROJECT_CONFIG_DIR_NAME): void {
 	const path = getCursorSdkProjectConfigPath(cwd, configDirName);
 	updateCursorSdkConfig(path, () => ({ ...config }));
 }

@@ -54,7 +54,16 @@ async function registerNativeCursorToolsFromSet(
 			continue;
 		}
 		registerNativeCursorTool ??= (await import("./cursor-native-tool-display-tools.js")).registerNativeCursorTool;
-		registerNativeCursorTool(pi, toolName);
+		try {
+			registerNativeCursorTool(pi, toolName);
+		} catch (error) {
+			// The host pi runtime may not provide the tool definition factory for
+			// this tool (prime-agent only ships bash/edit definitions). Keep the
+			// tool on the skipped list so Cursor falls back to its normal
+			// transcript/replay path instead of failing session setup.
+			skippedNativeToolNames.add(toolName);
+			continue;
+		}
 		registeredNativeToolNames.add(toolName);
 	}
 	return newlySkippedToolNames;

@@ -21,10 +21,22 @@ export function resolveCursorApiKey(apiKey?: string): string | undefined {
 	return trimmed;
 }
 
+// pi exposes readStoredCredential; prime-agent drops it but ships AuthStorage.
+// Both resolve to the same {type,key} credential shape, so try pi's helper first
+// and fall back to prime-agent's storage when the helper is absent.
+type StoredApiKeyCredential = { type: "api_key"; key: string };
+type AuthStorageLike = {
+	create?: (authPath?: string) => { get?: (provider: string) => StoredApiKeyCredential | { type: "oauth" } | undefined } | undefined;
+};
+
 async function getStoredCursorApiKey(): Promise<string | undefined> {
 	try {
-		const { readStoredCredential } = await import("@earendil-works/pi-coding-agent");
-		const credential = readStoredCredential(CURSOR_PROVIDER_ID);
+		const mod = await import("@earendil-works/pi-coding-agent");
+		const auth = mod as typeof mod & { AuthStorage?: AuthStorageLike };
+		const credential =
+			typeof auth.readStoredCredential === "function"
+				? auth.readStoredCredential(CURSOR_PROVIDER_ID)
+				: auth.AuthStorage?.create?.()?.get?.(CURSOR_PROVIDER_ID);
 		return resolveCursorApiKey(credential?.type === "api_key" ? credential.key : undefined);
 	} catch {
 		return undefined;
