@@ -86,7 +86,8 @@ Cursor.models.list({ apiKey });
 Startup discovery resolves `apiKey` in this order:
 
 1. Stored pi auth for provider `cursor` from `readStoredCredential("cursor")`, accepting only an `api_key` credential.
-2. `CURSOR_API_KEY`.
+2. Stored prime-agent auth for provider `cursor` from `~/.prime/agent/auth.json` when the primary agent dir has no usable key.
+3. `CURSOR_API_KEY`.
 
 Startup never parses `process.argv`; Pi remains the sole owner of CLI model/provider/key parsing. Provider turns keep Pi's resolved `options.apiKey`. Users can persist the stored key through `/login` -> `Use an API key` -> `Cursor`. If auth is added after startup, fallback models can run once Pi resolves the saved key for provider requests, and `/cursor-refresh-models` asks the command context's ModelRegistry for provider `cursor` and passes that normalized key explicitly to a forced live refresh.
 

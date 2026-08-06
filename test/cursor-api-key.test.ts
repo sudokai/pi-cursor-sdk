@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,9 +8,10 @@ import {
 	resolveCursorRuntimeApiKey,
 } from "../src/cursor-api-key.js";
 
-function writeStoredCursorApiKey(apiKey: string): void {
+function writeStoredCursorApiKey(apiKey: string, authPath = join(process.env.PI_CODING_AGENT_DIR!, "auth.json")): void {
+	mkdirSync(join(authPath, ".."), { recursive: true });
 	writeFileSync(
-		join(process.env.PI_CODING_AGENT_DIR!, "auth.json"),
+		authPath,
 		JSON.stringify({ cursor: { type: "api_key", key: apiKey } }, null, 2),
 	);
 }
@@ -65,5 +66,33 @@ describe("cursor-api-key helpers", () => {
 		process.env.CURSOR_API_KEY = "env-key-123";
 
 		expect(await resolveCursorRuntimeApiKey()).toBe("env-key-123");
+	});
+
+	it("falls back to ~/.prime/agent/auth.json when the primary agent dir has no cursor key", async () => {
+		const fakeHome = mkdtempSync(join(tmpdir(), "pi-cursor-api-key-home-"));
+		const originalHome = process.env.HOME;
+		process.env.HOME = fakeHome;
+		const primeAuthPath = join(fakeHome, ".prime/agent/auth.json");
+		writeStoredCursorApiKey("prime-stored-key-123", primeAuthPath);
+
+		expect(await resolveCursorRuntimeApiKey()).toBe("prime-stored-key-123");
+
+		if (originalHome === undefined) delete process.env.HOME;
+		else process.env.HOME = originalHome;
+		rmSync(fakeHome, { recursive: true, force: true });
+	});
+
+	it("prefers the primary agent dir cursor key over ~/.prime/agent/auth.json", async () => {
+		const fakeHome = mkdtempSync(join(tmpdir(), "pi-cursor-api-key-home-"));
+		const originalHome = process.env.HOME;
+		process.env.HOME = fakeHome;
+		writeStoredCursorApiKey("stored-key-123");
+		writeStoredCursorApiKey("prime-stored-key-123", join(fakeHome, ".prime/agent/auth.json"));
+
+		expect(await resolveCursorRuntimeApiKey()).toBe("stored-key-123");
+
+		if (originalHome === undefined) delete process.env.HOME;
+		else process.env.HOME = originalHome;
+		rmSync(fakeHome, { recursive: true, force: true });
 	});
 });
