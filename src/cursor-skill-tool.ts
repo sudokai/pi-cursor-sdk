@@ -118,21 +118,41 @@ export function formatCursorSkillsForPrompt(skills: readonly Skill[]): string {
 	return lines.join("\n");
 }
 
+type CursorSystemPromptValue = string | readonly string[];
+
 export function resolveCursorSkillSystemPrompt(
 	systemPrompt: string,
 	model: ExtensionContext["model"],
 	systemPromptOptions?: BuildSystemPromptOptions,
+	runtime?: CursorRuntime,
+): string;
+export function resolveCursorSkillSystemPrompt(
+	systemPrompt: readonly string[],
+	model: ExtensionContext["model"],
+	systemPromptOptions?: BuildSystemPromptOptions,
+	runtime?: CursorRuntime,
+): string[];
+export function resolveCursorSkillSystemPrompt(
+	systemPrompt: CursorSystemPromptValue,
+	model: ExtensionContext["model"],
+	systemPromptOptions?: BuildSystemPromptOptions,
 	runtime: CursorRuntime = "local",
-): string {
+): string | readonly string[] {
+	const isArray = typeof systemPrompt !== "string";
+	const promptText = isArray
+		? systemPrompt.filter((part): part is string => typeof part === "string").join("\n\n")
+		: systemPrompt;
+	const preservePromptShape = (resolved: string): string | string[] => (isArray ? [resolved] : resolved);
+
 	if (!isCursorModel(model)) return systemPrompt;
-	if (runtime === "cloud") return systemPrompt.replace(AVAILABLE_SKILLS_SECTION_PATTERN, "");
+	if (runtime === "cloud") return preservePromptShape(promptText.replace(AVAILABLE_SKILLS_SECTION_PATTERN, ""));
 	const skills = getVisibleSkills(systemPromptOptions?.skills);
 	if (skills.length === 0) return systemPrompt;
 	const replacement = formatCursorSkillsForPrompt(skills);
-	if (AVAILABLE_SKILLS_SECTION_PATTERN.test(systemPrompt)) {
-		return systemPrompt.replace(AVAILABLE_SKILLS_SECTION_PATTERN, replacement);
+	if (AVAILABLE_SKILLS_SECTION_PATTERN.test(promptText)) {
+		return preservePromptShape(promptText.replace(AVAILABLE_SKILLS_SECTION_PATTERN, replacement));
 	}
-	return `${systemPrompt}${replacement}`;
+	return preservePromptShape(`${promptText}${replacement}`);
 }
 
 async function collectResourcePaths(root: string, absoluteDir: string, output: string[]): Promise<void> {

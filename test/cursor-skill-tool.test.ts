@@ -97,6 +97,18 @@ describe("resolveCursorSkillSystemPrompt", () => {
 		expect(resolved).not.toContain(CURSOR_ACTIVATE_SKILL_MCP_NAME);
 		expect(resolved).not.toContain("/Users/me/.pi/agent/skills");
 	});
+	it("accepts OMP system prompt arrays for cloud runs", () => {
+		const resolved = resolveCursorSkillSystemPrompt(
+			[piSkillSection],
+			cursorModel,
+			{ ...createDefaultSystemPromptOptions("/repo"), skills: [skill] },
+			"cloud",
+		);
+
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0]).toContain("System prompt before skills.");
+		expect(resolved[0]).not.toContain("<available_skills>");
+	});
 
 	it("does not change prompts for non-Cursor models", () => {
 		expect(

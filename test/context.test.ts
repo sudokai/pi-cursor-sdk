@@ -26,6 +26,14 @@ describe("buildCursorPrompt", () => {
 		expect(result.text).toContain("System instructions from pi:");
 		expect(result.text).toContain("You are helpful.");
 	});
+	it("accepts OMP system prompt arrays", () => {
+		const ctx = {
+			systemPrompt: ["First instruction.", "Second instruction."],
+			messages: [],
+		} as unknown as Context;
+		const result = buildCursorPrompt(ctx);
+		expect(result.text).toContain("First instruction.\n\nSecond instruction.");
+	});
 
 	it("omits pi tool catalogs while preserving local skill catalogs for Cursor-facing system instructions", () => {
 		const ctx: Context = {

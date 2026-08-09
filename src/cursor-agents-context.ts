@@ -148,14 +148,38 @@ export function removePiAgentsContextFromSystemPrompt(
 	return systemPrompt.slice(0, start) + replacementSection + systemPrompt.slice(start + originalSection.length);
 }
 
+type CursorSystemPromptValue = string | readonly string[];
+
 export function resolveCursorFacingSystemPrompt(
 	systemPrompt: string,
 	model: ExtensionContext["model"],
 	systemPromptOptions?: BuildSystemPromptOptions,
 	settingSourcesRaw?: string,
 	agentDir?: string,
+	runtime?: CursorRuntime,
+): string;
+export function resolveCursorFacingSystemPrompt(
+	systemPrompt: readonly string[],
+	model: ExtensionContext["model"],
+	systemPromptOptions?: BuildSystemPromptOptions,
+	settingSourcesRaw?: string,
+	agentDir?: string,
+	runtime?: CursorRuntime,
+): string[];
+export function resolveCursorFacingSystemPrompt(
+	systemPrompt: CursorSystemPromptValue,
+	model: ExtensionContext["model"],
+	systemPromptOptions?: BuildSystemPromptOptions,
+	settingSourcesRaw?: string,
+	agentDir?: string,
 	runtime: CursorRuntime = "local",
-): string {
+): string | readonly string[] {
+	const isArray = typeof systemPrompt !== "string";
+	const promptText = isArray
+		? systemPrompt.filter((part): part is string => typeof part === "string").join("\n\n")
+		: systemPrompt;
+	const preservePromptShape = (resolved: string): string | string[] => (isArray ? [resolved] : resolved);
+
 	if (runtime === "cloud" || !systemPromptOptions) return systemPrompt;
 	const contextFiles = systemPromptOptions.contextFiles ?? [];
 	const settingSources =
@@ -165,5 +189,5 @@ export function resolveCursorFacingSystemPrompt(
 	if (!shouldSuppressPiAgentsContext(model, contextFiles, settingSources, agentDir)) {
 		return systemPrompt;
 	}
-	return removePiAgentsContextFromSystemPrompt(systemPrompt, contextFiles, settingSources, agentDir);
+	return preservePromptShape(removePiAgentsContextFromSystemPrompt(promptText, contextFiles, settingSources, agentDir));
 }

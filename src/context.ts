@@ -87,6 +87,16 @@ function getCursorBootstrapTailSections(
 function normalizePiContextMessages(messages: Context["messages"]): Message[] {
 	return convertToLlm(messages as Parameters<typeof convertToLlm>[0]);
 }
+function getCursorSystemPromptText(context: Context): string {
+	const rawContext: unknown = context;
+	if (!rawContext || typeof rawContext !== "object" || !("systemPrompt" in rawContext)) return "";
+	const systemPrompt = rawContext.systemPrompt;
+	if (typeof systemPrompt === "string") return systemPrompt;
+	if (Array.isArray(systemPrompt)) {
+		return systemPrompt.filter((part): part is string => typeof part === "string").join(SECTION_SEPARATOR);
+	}
+	return "";
+}
 
 function isTextBlock(block: { type: string }): block is { type: "text"; text: string } {
 	return block.type === "text";
@@ -337,7 +347,7 @@ function parseCursorContextFingerprint(fingerprint: string): CursorContextFinger
 
 export function computeCursorContextFingerprint(context: Context): string {
 	const payload: CursorContextFingerprintPayload = {
-		systemHash: hashCursorContextValue(context.systemPrompt ?? ""),
+		systemHash: hashCursorContextValue(getCursorSystemPromptText(context)),
 		messageHashes: context.messages.map((message, index) => serializeRawPiMessageForFingerprint(message, index)),
 	};
 	return JSON.stringify(payload);
@@ -418,9 +428,10 @@ export function buildCursorPrompt(context: Context, options: CursorPromptOptions
 	if (options.toolManifest) {
 		sectionsBeforeMessages.push(options.toolManifest);
 	}
+	const systemPromptText = getCursorSystemPromptText(context);
 
-	if (context.systemPrompt) {
-		sectionsBeforeMessages.push(`System instructions from pi:\n${sanitizeSystemPromptForCursor(context.systemPrompt)}`);
+	if (systemPromptText) {
+		sectionsBeforeMessages.push(`System instructions from pi:\n${sanitizeSystemPromptForCursor(systemPromptText)}`);
 	}
 
 	const messages = normalizePiContextMessages(context.messages);

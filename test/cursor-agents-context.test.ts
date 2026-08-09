@@ -239,6 +239,18 @@ describe("resolveCursorFacingSystemPrompt", () => {
 		);
 		expect(resolved).not.toContain("Project guidance");
 	});
+	it("accepts OMP system prompt arrays when stripping overlapping rules", () => {
+		const prompt = buildPiSystemPromptWithContextFiles([PROJECT_FILE]);
+		const resolved = resolveCursorFacingSystemPrompt(
+			[prompt],
+			cursorModel,
+			makeSystemPromptOptions([PROJECT_FILE]),
+			"all",
+		);
+
+		expect(resolved).toHaveLength(1);
+		expect(resolved[0]).not.toContain("Project guidance");
+	});
 
 	it("leaves prompt unchanged when systemPromptOptions is absent", () => {
 		const prompt = buildPiSystemPromptWithContextFiles([PROJECT_FILE]);
