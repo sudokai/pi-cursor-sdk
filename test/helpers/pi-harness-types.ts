@@ -1,5 +1,5 @@
 import type { MockedFunction } from "vitest";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai/compat";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
 	ExtensionCommandContext,
@@ -197,7 +197,7 @@ export interface EventHarness {
 }
 
 export interface PiHarness extends EventHarness {
-	registerProvider: MockFn<ExtensionAPI["registerProvider"]>;
+	registerProvider: ExtensionAPI["registerProvider"];
 	registerFlag: MockFn<ExtensionAPI["registerFlag"]>;
 	registerCommand: MockFn<ExtensionAPI["registerCommand"]>;
 	registerTool: MockFn<ExtensionAPI["registerTool"]> & ExtensionAPI["registerTool"];

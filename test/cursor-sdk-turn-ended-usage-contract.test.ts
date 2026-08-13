@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { TurnEndedUpdateSchema } from "@cursor/sdk";
-import type { AssistantMessage, Context } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import {
 	applyCursorUsage,
 	estimateCursorContextTotalTokens,

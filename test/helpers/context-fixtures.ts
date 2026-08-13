@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
-import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai/compat";
+import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
 import {
 	ModelRegistry,
 	ModelRuntime,
@@ -91,6 +91,7 @@ function createMinimalExtensionContextInternal(overrides: ExtensionContextOverri
 		sessionManager: createMinimalSessionManager(cwd, overrides.sessionManager),
 		modelRegistry: getSharedTestModelRegistry(),
 		model: makeModel("composer-2.5"),
+		scopedModels: [],
 		isIdle: vi.fn(() => true),
 		isProjectTrusted: vi.fn(() => true),
 		signal: undefined,
@@ -122,6 +123,8 @@ function createMinimalExtensionCommandContextInternal(
 	return {
 		...base,
 		...overrides,
+		getSystemPromptOptions:
+			overrides.getSystemPromptOptions ?? vi.fn(() => createDefaultSystemPromptOptions(base.cwd)),
 		waitForIdle: overrides.waitForIdle ?? vi.fn(async () => undefined),
 		newSession: overrides.newSession ?? vi.fn(async () => ({ cancelled: false })),
 		fork: overrides.fork ?? vi.fn(async () => ({ cancelled: false })),

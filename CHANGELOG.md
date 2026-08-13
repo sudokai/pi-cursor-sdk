@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-08-06
 
 ### Added
 
@@ -8,7 +8,13 @@
 
 ### Changed
 
+- Require Pi 0.84.0 or later, pin the local Pi validation packages to exact 0.84.0 with TypeBox 1.3.7, move pi-ai imports from the temporary compatibility entrypoint to the supported root API, and update test harness contexts for Pi's scoped-model and native-provider registration types.
+- Bound Vitest concurrency to four workers so process and filesystem contract tests remain reliable on high-core platform-smoke hosts.
 - Refresh the 34-model Cursor fallback catalog and checkpoint-derived context-window snapshot from the live `@cursor/sdk` 1.0.23 runtime.
+
+### Security
+
+- Refresh vulnerable transitive releases within their existing ranges: bundled Hono, fast-uri, and ip-address plus development-only PostCSS and protobufjs. The remaining production audit findings are confined to the pinned Cursor SDK → ConnectRPC → undici chain, which has no compatible fix.
 
 ### Fixed
 
