@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, type AssistantMessageEvent } from "@earendil-works/pi-ai";
 import {
 	createExtensionCommandContext,
 	createExtensionRegistrationPi,
@@ -251,6 +251,31 @@ describe("extension registration and discovery", () => {
 
 		await expect(resultPromise).resolves.toBe(message);
 		expect(mockedStreamCursor).toHaveBeenCalledOnce();
+	});
+
+	it("reports and scrubs synchronous Cursor provider runtime failures through the stream", async () => {
+		const apiKey = "cursor-dogfood-secret-key";
+		mockedStreamCursor.mockImplementationOnce(() => {
+			throw new Error(`synchronous provider failure: Bearer ${apiKey}`);
+		});
+		const stream = streamCursorLazy(makeModel("composer-2"), makeContext(), { apiKey });
+		const events: AssistantMessageEvent[] = [];
+		const consumeEvents = (async () => {
+			for await (const event of stream) events.push(event);
+		})();
+
+		const result = await stream.result();
+		await consumeEvents;
+
+		expect(events).toHaveLength(1);
+		const [errorEvent] = events;
+		expect(errorEvent).toMatchObject({ type: "error", reason: "error" });
+		if (errorEvent?.type !== "error") throw new Error("Expected a provider error event");
+		expect(errorEvent.error).toBe(result);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toMatch(/^Cursor provider runtime failed: /);
+		expect(result.errorMessage).toContain("[redacted]");
+		expect(result.errorMessage).not.toContain(apiKey);
 	});
 
 	it("keeps only canonical Cursor replay tools active for Cursor models", async () => {

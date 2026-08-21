@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, constants, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { commonBooleanFlag, commonRepeatStringFlag, parseArgv } from "./lib/cursor-cli-args.mjs";
 import { buildCursorSmokeEnvPlan, CURSOR_SDK_EVENT_DEBUG_ENV_NAMES, sealedNodePath } from "./lib/cursor-smoke-env.mjs";
-import { writeVisualManifest } from "./lib/cursor-visual-manifest.mjs";
+import {
+	ensureVisualArtifactDirectory,
+	removeVisualArtifactFile,
+	writeVisualArtifactFile,
+	writeVisualManifest,
+} from "./lib/cursor-visual-manifest.mjs";
 import { runVisualSmokeSelfTest } from "./visual-tui-smoke-self-test.mjs";
 import { buildTerminalHtml, writeTerminalScreenshot } from "./lib/cursor-visual-render.mjs";
 
@@ -15,10 +21,73 @@ const DEFAULT_HEIGHT = 45;
 const DEFAULT_WAIT_MS = 60_000;
 const DEFAULT_STARTUP_MS = 5_000;
 const DEFAULT_HISTORY_LINES = 3_000;
-const DEFAULT_MODEL = "cursor/composer-2-5";
+const DEFAULT_MODEL = "cursor/grok-4.6";
 const DEFAULT_MODE = "plan";
 const DEFAULT_SETTING_SOURCES = "none";
 const DEBUG_ENV_NAMES = CURSOR_SDK_EVENT_DEBUG_ENV_NAMES;
+
+// The tmux server is a private child process, so do not hand it the runner's
+// ambient environment. Keep only values needed to locate/run pi, preserve the
+// terminal and user runtime, and apply the explicit smoke flags below. In
+// particular, do not use a prefix-based rule: host environments commonly carry
+// credentials such as AWS_* and GITHUB_TOKEN.
+const VISUAL_TMUX_ENV_ALLOWLIST = Object.freeze([
+	"PATH",
+	"HOME",
+	"USER",
+	"LOGNAME",
+	"USERNAME",
+	"USERPROFILE",
+	"SHELL",
+	"TERM",
+	"TERM_PROGRAM",
+	"COLORTERM",
+	"LANG",
+	"LC_ALL",
+	"LC_CTYPE",
+	"TZ",
+	"TMPDIR",
+	"TMP",
+	"TEMP",
+	"XDG_CONFIG_HOME",
+	"XDG_DATA_HOME",
+	"XDG_CACHE_HOME",
+	"XDG_RUNTIME_DIR",
+	"NODE_OPTIONS",
+	"NODE_PATH",
+	"NODE_EXTRA_CA_CERTS",
+	"NODE_NO_WARNINGS",
+	"NO_COLOR",
+	"FORCE_COLOR",
+	"PI_CODING_AGENT_DIR",
+	"PI_OFFLINE",
+	"PI_SKIP_VERSION_CHECK",
+	"PI_CURSOR_SETTING_SOURCES",
+	"PI_CURSOR_NATIVE_TOOL_DISPLAY",
+	"PI_CURSOR_REGISTER_NATIVE_TOOLS",
+	"PI_CURSOR_PI_TOOL_BRIDGE",
+	"PI_CURSOR_EXPOSE_BUILTIN_TOOLS",
+	"PI_CURSOR_ASK_QUESTION",
+	"PI_CURSOR_TOOL_MANIFEST",
+	"PI_CURSOR_TASK_PRESENTATION",
+	"PI_CURSOR_TURN_ENDED_WAIT_MS",
+	"PI_CURSOR_PRESERVE_PI_AGENTS_MD",
+	"PI_CURSOR_MCP_TOOL_TIMEOUT_MS",
+	"PI_CURSOR_MCP_TOOL_TIMEOUT_SECONDS",
+	"PI_CURSOR_MCP_CONNECT_TIMEOUT_MS",
+	"PI_CURSOR_MCP_CONNECT_TIMEOUT_SECONDS",
+	"PI_CURSOR_PI_BRIDGE_CALL_TIMEOUT_MS",
+	"PI_CURSOR_PI_TOOL_BRIDGE_DEBUG",
+	"PI_CURSOR_PI_TOOL_BRIDGE_DEBUG_FILE",
+	"PI_CURSOR_HTTP_1_1",
+	"PI_CURSOR_AUTO_REVIEW",
+	"PI_CURSOR_SANDBOX",
+	"PI_CURSOR_LOCAL_FORCE",
+	"PI_CURSOR_LOCAL_RESUME",
+	"PI_CURSOR_SDK_DISABLE_MODEL_CACHE",
+	"PI_CURSOR_SDK_MODEL_CACHE_TTL_MS",
+	"CURSOR_API_KEY",
+]);
 
 const EXIT_FAILURE = 1;
 const EXIT_USAGE = 2;
@@ -44,7 +113,7 @@ Common options:
   --model MODEL                 Cursor model. Default: ${DEFAULT_MODEL}.
   --mode agent|plan             Cursor SDK mode. Default: ${DEFAULT_MODE}.
   --session-dir PATH            pi session directory. Default: <out-dir>/<label>.session.
-  --session-id ID               pi session id. Default: visual-<label>-<timestamp>.
+  --session-id ID               pi session id; pass to resume a prior capture session. Default: pi-assigned, so fresh captures avoid the new-session warning line.
   --width N                     PTY columns. Default: ${DEFAULT_WIDTH}.
   --height N                    PTY rows. Default: ${DEFAULT_HEIGHT}.
   --history-lines N             tmux capture history lines. Default: ${DEFAULT_HISTORY_LINES}.
@@ -63,7 +132,11 @@ Native replay isolation defaults:
   PI_CURSOR_SETTING_SOURCES=none
   PI_CURSOR_PI_TOOL_BRIDGE=0
   PI_CURSOR_EXPOSE_BUILTIN_TOOLS=0
+  PI_CODING_AGENT_DIR=<out-dir>/pi-agent  (isolated quietStartup settings; no auth artifact)
+  PI_OFFLINE=1
+  PI_SKIP_VERSION_CHECK=1
   TERM=xterm-256color
+  tmux starts in --cwd with a non-login shell so a stale tmux-server cwd cannot print getcwd errors
   Debug artifact env is cleared before each run; --event-debug sets a deterministic debug dir.
 
 Artifacts written:
@@ -76,6 +149,7 @@ Artifacts written:
 
 Prerequisites:
   - pi, node, tmux, and npm-installed dev dependencies on PATH / in node_modules.
+  - POSIX runs also require a C compiler (cc) for the descriptor-relative artifact helper; Windows artifact mutations fail closed because Node has no equivalent handle-relative API.
   - The runner resolves pi/tmux from the parent PATH, uses process.execPath for node, and seals pi-shim PATH for prereq checks and tmux.
   - For automatic PNG capture, install a Playwright browser once when needed:
       npx playwright install chromium
@@ -194,8 +268,38 @@ function parseArgs(argv) {
 	options.safeLabel = sanitizeLabel(options.label);
 	options.outDir ??= resolve(`/tmp/pi-cursor-sdk-visual-smoke-${timestamp()}`);
 	options.sessionDir ??= resolve(options.outDir, `${options.safeLabel}.session`);
-	options.sessionId ??= `visual-${options.safeLabel}-${Date.now()}`;
+	options.agentDir ??= resolve(options.outDir, "pi-agent");
 	return options;
+}
+
+function ensureArtifactDirectory(directory) {
+	return ensureVisualArtifactDirectory(directory);
+}
+
+function seedVisualAgentDir(agentDir) {
+	ensureArtifactDirectory(agentDir);
+	// Remove auth left by an older run in a reused output directory. The no-follow
+	// helper refuses symlinked destinations and validates the parent before unlinking.
+	removeVisualArtifactFile(join(agentDir, "auth.json"));
+	// Keep the selected artifact directory credential-free. The launch environment
+	// receives only the Cursor API key (read into memory below), while pi still gets
+	// an isolated settings directory and cannot load host extensions or settings.
+	writeVisualArtifactFile(
+		join(agentDir, "settings.json"),
+		`${JSON.stringify({ quietStartup: true, enableInstallTelemetry: false })}\n`,
+	);
+}
+
+function readHostCursorApiKey() {
+	try {
+		const auth = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
+		const credential = auth?.cursor;
+		return credential?.type === "api_key" && typeof credential.key === "string" && credential.key.trim()
+			? credential.key.trim()
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function sanitizeLabel(label) {
@@ -205,6 +309,17 @@ function sanitizeLabel(label) {
 
 function shellQuote(value) {
 	return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildVisualTmuxEnv(baseEnv, envAssignments, sealedPath) {
+	const env = {};
+	for (const name of VISUAL_TMUX_ENV_ALLOWLIST) {
+		const value = baseEnv[name];
+		if (value !== undefined) env[name] = value;
+	}
+	env.PATH = sealedPath;
+	for (const [name, value] of envAssignments) env[name] = value;
+	return env;
 }
 
 function run(command, args, options = {}) {
@@ -271,12 +386,15 @@ function sleep(ms) {
 }
 
 function writeUtf8(path, text) {
-	mkdirSync(dirname(path), { recursive: true });
-	writeFileSync(path, text, "utf8");
+	writeVisualArtifactFile(path, text);
 }
 
-function capturePane(tmuxBin, sessionName, args) {
-	const result = run(tmuxBin, ["capture-pane", ...args, "-t", sessionName]);
+function tmuxArgs(socketName, args) {
+	return ["-L", socketName, ...args];
+}
+
+function capturePane(tmuxBin, socketName, sessionName, args) {
+	const result = run(tmuxBin, tmuxArgs(socketName, ["capture-pane", ...args, "-t", sessionName]));
 	if (result.status !== 0) {
 		throw new Error(result.stderr?.toString().trim() || `tmux capture-pane exited ${result.status}`);
 	}
@@ -346,9 +464,9 @@ function checkLeftovers(patterns) {
 	}
 }
 
-function buildLaunchPlan(options, commands, shell) {
+function buildLaunchPlan(options, commands, shell, baseEnv = process.env) {
 	const smokeEnvPlan = buildCursorSmokeEnvPlan({
-		baseEnv: process.env,
+		baseEnv,
 		nodePath: commands.node,
 		settingSources: options.settingSources,
 		nativeToolDisplay: true,
@@ -359,7 +477,13 @@ function buildLaunchPlan(options, commands, shell) {
 		eventDebugDir: options.eventDebug ? resolve(options.outDir, `${options.safeLabel ?? "visual-smoke"}.cursor-sdk-events`) : undefined,
 	});
 	const sealedPath = commands.sealedPath ?? smokeEnvPlan.sealedPath;
-	const envAssignments = smokeEnvPlan.envEntries;
+	const agentDir = options.agentDir ?? resolve(options.outDir, "pi-agent");
+	const envAssignments = [
+		...smokeEnvPlan.envEntries,
+		["PI_CODING_AGENT_DIR", agentDir],
+		["PI_OFFLINE", "1"],
+		["PI_SKIP_VERSION_CHECK", "1"],
+	];
 	const clearEnvNames = smokeEnvPlan.clearEnvNames;
 	const command = [
 		...envAssignments.map(([name, value]) => `${name}=${shellQuote(value)}`),
@@ -370,7 +494,7 @@ function buildLaunchPlan(options, commands, shell) {
 		"--cursor-no-fast",
 		"--cursor-mode", shellQuote(options.mode),
 		"--session-dir", shellQuote(options.sessionDir),
-		"--session-id", shellQuote(options.sessionId),
+		...(options.sessionId ? ["--session-id", shellQuote(options.sessionId)] : []),
 		"--model", shellQuote(options.model),
 	].join(" ");
 	const clearLines = clearEnvNames.map((name) => `unset ${name}`).join("\n");
@@ -382,7 +506,7 @@ function buildLaunchPlan(options, commands, shell) {
 	]
 		.filter(Boolean)
 		.join("\n");
-	return { command, clearEnvNames, envAssignments, script, shell };
+	return { command, clearEnvNames, envAssignments, tmuxEnv: buildVisualTmuxEnv(baseEnv, envAssignments, sealedPath), script, shell };
 }
 
 function runVisualSmoke(options) {
@@ -393,15 +517,23 @@ function runVisualSmoke(options) {
 		node,
 		sealedPath,
 		tmux: requireCommand("tmux"),
+		tmuxSocket: `pi-visual-${process.pid}-${options.safeLabel}`,
 	};
 
-	mkdirSync(options.outDir, { recursive: true });
-	mkdirSync(options.sessionDir, { recursive: true });
+	options.outDir = ensureArtifactDirectory(options.outDir);
+	options.sessionDir = ensureArtifactDirectory(options.sessionDir);
+	options.agentDir ??= resolve(options.outDir, "pi-agent");
+	seedVisualAgentDir(options.agentDir);
+	const launchEnv = { ...process.env };
+	if (!launchEnv.CURSOR_API_KEY?.trim()) {
+		const hostCursorApiKey = readHostCursorApiKey();
+		if (hostCursorApiKey) launchEnv.CURSOR_API_KEY = hostCursorApiKey;
+	}
 
 	const sessionName = `pi-visual-${options.safeLabel}-${process.pid}`;
 	const bufferName = `pi-visual-prompt-${process.pid}`;
 	const shell = resolveShell(process.env.SHELL || "/bin/bash");
-	const { script } = buildLaunchPlan(options, commands, shell);
+	const { script, tmuxEnv } = buildLaunchPlan(options, commands, shell, launchEnv);
 
 	console.log(`[visual-smoke] out-dir=${options.outDir}`);
 	console.log(`[visual-smoke] session-dir=${options.sessionDir}`);
@@ -418,31 +550,46 @@ function runVisualSmoke(options) {
 	const jsonlMtimesBeforeRun = snapshotJsonlMtimes(options.sessionDir);
 	const runStartedAtMs = Date.now();
 	try {
-		const start = run(commands.tmux, ["new-session", "-d", "-s", sessionName, "-x", String(options.width), "-y", String(options.height), "--", shell, "-lc", script]);
+		const start = run(commands.tmux, tmuxArgs(commands.tmuxSocket, [
+			"new-session",
+			"-d",
+			"-s",
+			sessionName,
+			"-c",
+			options.cwd,
+			"-x",
+			String(options.width),
+			"-y",
+			String(options.height),
+			"--",
+			shell,
+			"-c",
+			script,
+		]), { env: tmuxEnv });
 		if (start.status !== 0) throw new Error(`tmux new-session failed: ${start.stderr?.toString().trim() || start.status}`);
 		sessionStarted = true;
 
 		sleep(options.startupMs);
-		const load = run(commands.tmux, ["load-buffer", "-b", bufferName, "-"], { input: Buffer.from(options.prompt, "utf8") });
+		const load = run(commands.tmux, tmuxArgs(commands.tmuxSocket, ["load-buffer", "-b", bufferName, "-"]), { input: Buffer.from(options.prompt, "utf8") });
 		if (load.status !== 0) throw new Error(`tmux load-buffer failed: ${load.stderr?.toString().trim() || load.status}`);
 		bufferLoaded = true;
 		try {
-			const paste = run(commands.tmux, ["paste-buffer", "-b", bufferName, "-t", sessionName]);
+			const paste = run(commands.tmux, tmuxArgs(commands.tmuxSocket, ["paste-buffer", "-b", bufferName, "-t", sessionName]));
 			if (paste.status !== 0) throw new Error(`tmux paste-buffer failed: ${paste.stderr?.toString().trim() || paste.status}`);
 			// Give bracketed paste handling a moment to finish before submitting.
 			sleep(250);
-			const enter = run(commands.tmux, ["send-keys", "-t", sessionName, "Enter"]);
+			const enter = run(commands.tmux, tmuxArgs(commands.tmuxSocket, ["send-keys", "-t", sessionName, "Enter"]));
 			if (enter.status !== 0) throw new Error(`tmux send-keys failed: ${enter.stderr?.toString().trim() || enter.status}`);
 		} finally {
-			run(commands.tmux, ["delete-buffer", "-b", bufferName]);
+			run(commands.tmux, tmuxArgs(commands.tmuxSocket, ["delete-buffer", "-b", bufferName]));
 			bufferLoaded = false;
 		}
 
 		sleep(options.waitMs);
 
 		const historyStart = `-${options.historyLines}`;
-		const ansi = capturePane(commands.tmux, sessionName, ["-e", "-p", "-S", historyStart]);
-		const plain = capturePane(commands.tmux, sessionName, ["-p", "-S", historyStart]);
+		const ansi = capturePane(commands.tmux, commands.tmuxSocket, sessionName, ["-e", "-p", "-S", historyStart]);
+		const plain = capturePane(commands.tmux, commands.tmuxSocket, sessionName, ["-p", "-S", historyStart]);
 
 		const base = resolve(options.outDir, options.safeLabel);
 		const ansiPath = `${base}.ansi`;
@@ -467,8 +614,8 @@ function runVisualSmoke(options) {
 
 		return { ...partialArtifacts, jsonlPath };
 	} finally {
-		if (bufferLoaded) run(commands.tmux, ["delete-buffer", "-b", bufferName]);
-		if (sessionStarted) run(commands.tmux, ["kill-session", "-t", sessionName]);
+		if (bufferLoaded) run(commands.tmux, tmuxArgs(commands.tmuxSocket, ["delete-buffer", "-b", bufferName]));
+		if (sessionStarted) run(commands.tmux, tmuxArgs(commands.tmuxSocket, ["kill-session", "-t", sessionName]));
 	}
 }
 
@@ -492,6 +639,8 @@ try {
 			requireNode,
 			requireCommand,
 			buildLaunchPlan,
+			ensureArtifactDirectory,
+			writeUtf8,
 			run,
 			runVisualSmoke,
 		});

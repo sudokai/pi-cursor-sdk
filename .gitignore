@@ -1,5 +1,8 @@
 node_modules/
 dist/
+dist.staging*/
+dist.backup*/
+dist.publish.lock*/
 coverage/
 .env
 .env.*

@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import * as PiCodingAgent from "@earendil-works/pi-coding-agent";
 
 export const CURSOR_API_KEY_ENV_VAR = "CURSOR_API_KEY";
 const CURSOR_PROVIDER_ID = "cursor";
+const PI_AGENT_CONFIG_DIR_NAME = ".pi/agent";
 const PRIME_AGENT_CONFIG_DIR_NAME = ".prime/agent";
 
 // Non-secret literal sentinel for pi's provider registry. Pi 0.77 treats `$ENV_VAR`
@@ -60,6 +61,13 @@ function userHomeDir(): string {
 	return homedir();
 }
 
+export function resolveCursorPrimaryAuthPath(auth: Pick<PiCodingAgentAuthModule, "getAgentDir"> = PiCodingAgent): string {
+	const primaryAgentDir = typeof auth.getAgentDir === "function"
+		? auth.getAgentDir()
+		: join(userHomeDir(), PI_AGENT_CONFIG_DIR_NAME);
+	return join(primaryAgentDir, "auth.json");
+}
+
 function storedCursorAuthPaths(primaryAuthPath: string): string[] {
 	const paths = [primaryAuthPath];
 	const primeAuthPath = join(userHomeDir(), PRIME_AGENT_CONFIG_DIR_NAME, "auth.json");
@@ -69,9 +77,8 @@ function storedCursorAuthPaths(primaryAuthPath: string): string[] {
 
 async function getStoredCursorApiKey(): Promise<string | undefined> {
 	try {
-		const mod = await import("@earendil-works/pi-coding-agent");
-		const auth = mod as typeof mod & PiCodingAgentAuthModule;
-		const primaryAuthPath = join(typeof auth.getAgentDir === "function" ? auth.getAgentDir() : getAgentDir(), "auth.json");
+		const auth = PiCodingAgent as typeof PiCodingAgent & PiCodingAgentAuthModule;
+		const primaryAuthPath = resolveCursorPrimaryAuthPath(auth);
 		for (const authPath of storedCursorAuthPaths(primaryAuthPath)) {
 			if (!existsSync(authPath)) continue;
 			const resolved = resolveStoredCursorApiKeyFromCredential(readStoredCredentialFromAuth(auth, authPath));

@@ -4,7 +4,8 @@ Short maintainer checklist for **minimal-surface** validation after prompt, brid
 
 ## Minimal environment
 
-- Extension only: `pi --approve -e . --cursor-no-fast --model cursor/composer-2-5`
+- Build first after any `src/` edit: `npm run build` (the pi manifest loads compiled `dist/`)
+- Extension only: `pi --approve -e . --cursor-no-fast --model cursor/grok-4.6`
 - Fresh session dir: `--session-dir /tmp/pi-cursor-dogfood-<id>`
 - Baseline surface (no ambient Cursor MCP/rules):
   - `PI_CURSOR_SETTING_SOURCES=none`, **or**

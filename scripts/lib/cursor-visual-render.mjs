@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
+import { writeVisualArtifactFile } from "./cursor-visual-manifest.mjs";
 
 function escapeHtml(text) {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -66,7 +67,7 @@ header code { color: #d8dee9; }
 <header>
 	<div><strong>pi-cursor-sdk visual smoke</strong> <code>${escapeHtml(options.label)}</code></div>
 	<div>model <code>${escapeHtml(options.model)}</code> · mode <code>${escapeHtml(options.mode)}</code> · cwd <code>${escapeHtml(options.cwd)}</code></div>
-	<div>session <code>${escapeHtml(options.sessionId)}</code> · captured ${new Date().toISOString()}</div>
+	<div>session <code>${escapeHtml(options.sessionId ?? "pi-assigned")}</code> · captured ${new Date().toISOString()}</div>
 </header>
 <div id="terminal"></div>
 <noscript><pre class="fallback">${escapeHtml(plain)}</pre></noscript>
@@ -122,7 +123,8 @@ export async function writeTerminalScreenshot(htmlPath, pngPath, width, height) 
 		});
 		await page.goto(pathToFileURL(htmlPath).href);
 		await page.waitForSelector('body[data-render-ready="true"]', { timeout: 30_000 });
-		await page.locator("#terminal").screenshot({ path: pngPath });
+		const png = await page.locator("#terminal").screenshot();
+		writeVisualArtifactFile(pngPath, png);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		throw new Error(`failed to capture PNG with Playwright: ${message}\nInstall Chromium with: npx playwright install chromium\nOr rerun with --no-screenshot and capture ${htmlPath} with agent_browser.`);

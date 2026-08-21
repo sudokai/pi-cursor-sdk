@@ -18,6 +18,7 @@ import {
 	skippedNativeToolNames,
 } from "./cursor-native-tool-display-state.js";
 import { isCursorReplayToolName } from "./cursor-tool-presentation-registry.js";
+import { registerNativeCursorTool } from "./cursor-native-tool-display-tools.js";
 
 export const CURSOR_CORE_PI_REPLAY_TOOL_NAMES = ["read", "bash", "edit", "write"] as const;
 const CORE_PI_TOOL_NAMES = new Set<string>(CURSOR_CORE_PI_REPLAY_TOOL_NAMES);
@@ -45,7 +46,6 @@ async function registerNativeCursorToolsFromSet(
 	toolNames: readonly NativeCursorToolName[],
 ): Promise<NativeCursorToolName[]> {
 	const newlySkippedToolNames: NativeCursorToolName[] = [];
-	let registerNativeCursorTool: ((pi: CursorNativeToolRegistryApi, toolName: NativeCursorToolName) => void) | undefined;
 	for (const toolName of toolNames) {
 		if (registeredNativeToolNames.has(toolName) || skippedNativeToolNames.has(toolName)) continue;
 		if (hasNonBuiltinTool(pi, toolName)) {
@@ -53,10 +53,9 @@ async function registerNativeCursorToolsFromSet(
 			newlySkippedToolNames.push(toolName);
 			continue;
 		}
-		registerNativeCursorTool ??= (await import("./cursor-native-tool-display-tools.js")).registerNativeCursorTool;
 		try {
 			registerNativeCursorTool(pi, toolName);
-		} catch (error) {
+		} catch {
 			// The host pi runtime may not provide the tool definition factory for
 			// this tool (prime-agent only ships bash/edit definitions). Keep the
 			// tool on the skipped list so Cursor falls back to its normal

@@ -15,6 +15,7 @@ import type {
 	CursorProviderTurnSendResult,
 } from "./cursor-provider-turn-types.js";
 import type { CursorSdkEventDebugSink } from "./cursor-sdk-event-debug.js";
+import { primeCursorBilledUsageBaseline } from "./cursor-sdk-billed-usage.js";
 
 export interface SendCursorProviderTurnParams {
 	params: CursorProviderTurnRunnerParams;
@@ -110,6 +111,19 @@ export async function sendCursorProviderTurn(sendParams: SendCursorProviderTurnP
 				turnCoordinator.handleStep(args.step);
 			},
 		};
+		throwIfAborted();
+		if (prepared.runtimeTarget === "local") {
+			try {
+				prepared.runtime.billedUsageBaselineReady = await primeCursorBilledUsageBaseline({
+					agent,
+					agentId: agent.agentId,
+					runtime: prepared.runtimeTarget,
+				});
+			} catch (error) {
+				prepared.runtime.billedUsageBaselineReady = false;
+				recordDebug(() => sdkEventDebug?.recordError("cursor_billed_usage_baseline", error));
+			}
+		}
 		throwIfAborted();
 		if (prepared.runtimeTarget === "local" && consumeCursorLocalForceOverride(prepared.localForce)) {
 			sendOptions.local = { force: true };

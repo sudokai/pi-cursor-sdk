@@ -15,6 +15,7 @@ import { registerCursorFallbackIssueWarning } from "./cursor-fallback-warning.js
 import { registerCursorAgentsContextDedup } from "./cursor-agents-context-registration.js";
 import { registerCursorOverflowNormalization } from "./cursor-provider-overflow.js";
 import { registerCursorSdkSessionProcessErrorGuard } from "./cursor-sdk-process-error-guard.js";
+import { prepareCursorSessionForCompaction } from "./cursor-session-compaction-prep.js";
 
 type CursorExtensionApi =
 	& Pick<ExtensionAPI, "registerProvider" | "registerCommand" | "on">
@@ -54,7 +55,6 @@ export default async function (pi: CursorExtensionApi) {
 	registerCursorSessionAgentLifecycle(pi);
 	registerCursorSessionAgentResume(pi);
 	pi.on("session_before_compact", async () => {
-		const { prepareCursorSessionForCompaction } = await import("./cursor-session-compaction-prep.js");
 		await prepareCursorSessionForCompaction();
 	});
 	registerCursorRuntimeControls(pi);

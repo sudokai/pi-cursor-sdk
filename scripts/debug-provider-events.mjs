@@ -23,6 +23,7 @@ import {
 } from "./lib/cursor-child-process.mjs";
 import { scrubSensitiveText } from "../shared/cursor-sensitive-text.mjs";
 import { createScriptFail } from "./lib/cursor-script-fail.mjs";
+import { ensureBuilt } from "./lib/ensure-built.mjs";
 import { serializeCursorSettingSources } from "../shared/cursor-setting-sources.mjs";
 
 function isMainModule() {
@@ -35,7 +36,7 @@ function isMainModule() {
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL("..", import.meta.url));
 const packageJson = require("../package.json");
-const DEFAULT_MODEL = "cursor/composer-2-5";
+const DEFAULT_MODEL = "cursor/grok-4.6";
 const DEFAULT_OUT_BASE = ".debug/cursor-sdk-events";
 const SDK_EVENT_DEBUG_LOG_PREFIX = "[pi-cursor-sdk:sdk-events]";
 const PI_SESSION_SNAPSHOT_ARTIFACT = "pi-session-snapshot.jsonl";
@@ -301,6 +302,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
 		printHelp();
 		return;
 	}
+	ensureBuilt();
 	console.log(JSON.stringify(await runDebugProviderEvents(args, env)));
 }
 

@@ -21,12 +21,15 @@ export interface CursorUsagePromptOptions extends CursorPromptOptions {
  * Contract (verified against @cursor/sdk 1.0.23 and the Cursor usage-events CSV):
  * - For a single model invocation, `inputTokens` is the full prompt size and
  *   `cacheReadTokens` / `cacheWriteTokens` partition it.
- * - The SDK emits one `turn-ended` per agent run. For multi-invocation runs those
- *   fields are a billing sum, which is valid spend but never context occupancy.
- * - The SDK's published `totalTokens` transform double-counts cache; do not copy it.
+ * - The SDK emits one `turn-ended` per agent run. For multi-invocation runs
+ *   those fields are a billing sum, which is valid spend but never context
+ *   occupancy.
+ * - The SDK's published `totalTokens` transform double-counts cache; do not
+ *   copy it.
  * - Pi stores uncached input and cache fields as disjoint spend components.
- * - Occupancy (`usage.totalTokens`) is always a local context estimate, floored at
- *   the last accepted compatible in-window assistant occupancy.
+ * - Occupancy (`usage.totalTokens`) is always a replayable local context estimate,
+ *   floored at the last accepted compatible in-window assistant occupancy. The
+ *   turn-ended aggregate is never a per-invocation occupancy measurement.
  */
 export interface CursorSdkTurnUsage {
 	/** Full prompt tokens for one invocation, or the summed full-prompt tokens across a run. */
@@ -115,12 +118,42 @@ export function isCursorSdkUsageStructurallyValid(turnUsage: CursorSdkTurnUsage)
 	return counts.every((count) => Number.isFinite(count) && count >= 0) && Number.isFinite(uncachedInput) && uncachedInput >= 0;
 }
 
+/** Whether SDK usage can safely populate pi spend fields. */
+export function isCursorSdkUsagePartitionSafe(turnUsage: CursorSdkTurnUsage): boolean {
+	return isCursorSdkUsageStructurallyValid(turnUsage);
+}
+
+export interface CursorSdkUsageApplyOptions {
+	runtime: CursorRuntime;
+	turn?: CursorSdkTurnUsage;
+	billed?: CursorSdkTurnUsage;
+}
+
+export interface CursorSdkUsageCarrier {
+	cursorSdk?: CursorSdkTurnUsage;
+}
+
 function isCompatibleCursorAssistantMeasurement(assistant: AssistantMessage, model: Model<Api>): boolean {
 	return assistant.api === model.api && assistant.provider === model.provider && assistant.model === model.id;
 }
 
-function getLastAcceptedContextOccupancy(context: Context, model: Model<Api>): number {
+function getLatestCompactionBoundary(context: Context): { index: number; tokensBefore?: number } | undefined {
 	for (let index = context.messages.length - 1; index >= 0; index -= 1) {
+		const message = context.messages[index] as { role?: string; tokensBefore?: number };
+		if (message.role !== "compactionSummary") continue;
+		const tokensBefore = message.tokensBefore;
+		return {
+			index,
+			tokensBefore: Number.isFinite(tokensBefore) && tokensBefore !== undefined && tokensBefore > 0 ? Math.floor(tokensBefore) : undefined,
+		};
+	}
+	return undefined;
+}
+
+function getLastAcceptedContextOccupancy(context: Context, model: Model<Api>): number {
+	const boundary = getLatestCompactionBoundary(context);
+	for (let index = context.messages.length - 1; index >= 0; index -= 1) {
+		if (boundary && index < boundary.index) break;
 		const message = context.messages[index];
 		if (message.role !== "assistant" || !("usage" in message)) continue;
 		const assistant = message as AssistantMessage;
@@ -128,7 +161,9 @@ function getLastAcceptedContextOccupancy(context: Context, model: Model<Api>): n
 		if (!isCompatibleCursorAssistantMeasurement(assistant, model)) continue;
 		const { usage } = assistant;
 		const total = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-		if (Number.isFinite(total) && total > 0 && total <= model.contextWindow) return total;
+		if (!Number.isFinite(total) || total <= 0 || total > model.contextWindow) continue;
+		if (boundary?.tokensBefore !== undefined && total >= boundary.tokensBefore) continue;
+		return total;
 	}
 	return 0;
 }
@@ -139,28 +174,16 @@ export function resolveCursorOccupancyTokens(partial: AssistantMessage, model: M
 }
 
 /**
- * Real SDK `turn-ended` billing carried alongside pi usage on a host-ignored
- * custom field. The Cursor SDK emits one `turn-ended` per agent run whose usage
- * is a billing sum across invocations (verified against the Cursor usage-events
- * CSV); it is valid spend but never context occupancy, so pi-cursor-sdk keeps it
- * here for its own accounting instead of exposing it on overflow-visible fields.
+ * Project either raw local or verified billed SDK spend onto pi. Both sources
+ * use the same overflow-safe pi fields and preserve the exact SDK partition on
+ * the host-ignored carrier; occupancy stays a replayable context estimate.
  */
-export interface CursorSdkUsageCarrier {
-	cursorSdk?: CursorSdkTurnUsage;
-}
-
-/** Map local SDK spend onto pi while keeping occupancy a local estimate. */
-export function applyCursorSdkUsage(
+function applyCursorSdkUsageProjection(
 	partial: AssistantMessage,
 	turnUsage: CursorSdkTurnUsage,
 	model: Model<Api>,
 	context: Context,
 ): void {
-	// The SDK's turn-ended usage is a billing sum across invocations in the run,
-	// never context occupancy. pi-ai's silent-overflow check reads `input + cacheRead`
-	// as prompt size, so keep the overflow-visible fields occupancy-safe (uncached
-	// input capped at the prompt budget, cache fields zero) and carry the real SDK
-	// billing on the host-ignored `cursorSdk` field instead.
 	const maxInputTokens = getCursorPromptOptions(model).maxInputTokens;
 	partial.usage.input = Math.min(getCursorSdkUncachedInputTokens(turnUsage), maxInputTokens);
 	partial.usage.output = turnUsage.outputTokens;
@@ -173,6 +196,26 @@ export function applyCursorSdkUsage(
 		cacheReadTokens: turnUsage.cacheReadTokens,
 		cacheWriteTokens: turnUsage.cacheWriteTokens,
 	};
+}
+
+/** Map raw local SDK spend onto pi while keeping occupancy safe. */
+export function applyCursorSdkUsage(
+	partial: AssistantMessage,
+	turnUsage: CursorSdkTurnUsage,
+	model: Model<Api>,
+	context: Context,
+): void {
+	applyCursorSdkUsageProjection(partial, turnUsage, model, context);
+}
+
+/** Map a verified Agent.getUsage() billed row onto pi without exposing billing sums to pi-ai. */
+export function applyCursorSdkBilledUsage(
+	partial: AssistantMessage,
+	turnUsage: CursorSdkTurnUsage,
+	model: Model<Api>,
+	context: Context,
+): void {
+	applyCursorSdkUsageProjection(partial, turnUsage, model, context);
 }
 
 export function applyCursorApproximateUsage(partial: AssistantMessage, model: Model<Api>, context: Context, sessionInputTokens: number): void {
@@ -193,12 +236,17 @@ export function applyCursorUsage(
 	model: Model<Api>,
 	context: Context,
 	sessionInputTokens: number,
-	sdkUsage?: { runtime: CursorRuntime; turn?: CursorSdkTurnUsage },
+	sdkUsage?: CursorSdkUsageApplyOptions,
 ): void {
+	const billed = sdkUsage?.billed;
+	const localTurn = sdkUsage?.runtime === "local" ? sdkUsage.turn : undefined;
+	if (billed && isCursorSdkUsagePartitionSafe(billed)) {
+		applyCursorSdkBilledUsage(partial, billed, model, context);
+		return;
+	}
 	// Cloud raw usage remains display-only until its field semantics are independently observed.
-	const usage = sdkUsage?.runtime === "local" ? sdkUsage.turn : undefined;
-	if (usage && isCursorSdkUsageStructurallyValid(usage)) {
-		applyCursorSdkUsage(partial, usage, model, context);
+	if (localTurn && isCursorSdkUsageStructurallyValid(localTurn)) {
+		applyCursorSdkUsage(partial, localTurn, model, context);
 		return;
 	}
 	applyCursorApproximateUsage(partial, model, context, sessionInputTokens);

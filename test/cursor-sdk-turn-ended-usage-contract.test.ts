@@ -21,6 +21,7 @@ interface TurnEndedUsageContractFixture {
 	provenance: {
 		sdkPackage: string;
 		sdkVersion: string;
+		compatibleSdkVersions: string[];
 		verified: string;
 		issue: string;
 		capture: string;
@@ -82,7 +83,9 @@ const fixture = JSON.parse(
 describe("installed Cursor SDK turn-ended usage contract", () => {
 	it("locks published SDK TokenUsage transform separately from observed raw turn-ended semantics", () => {
 		expect(fixture.provenance.sdkPackage).toBe("@cursor/sdk");
-		expect(fixture.provenance.sdkVersion).toBe(installedSdkVersion);
+		expect(fixture.provenance.sdkVersion).toBe("1.0.23");
+		expect(fixture.provenance.compatibleSdkVersions).toContain(fixture.provenance.sdkVersion);
+		expect(fixture.provenance.compatibleSdkVersions).toContain(installedSdkVersion);
 		expect(fixture.provenance.issue).toContain("/issues/196");
 
 		const usageTypes = readFileSync(join(sdkRoot, "dist/esm/usage-types.d.ts"), "utf8");

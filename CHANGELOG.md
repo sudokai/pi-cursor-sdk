@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.3.6 - 2026-08-18
+
+### Fixed
+
+- Isolate `smoke:visual` captures from the host: pi runs with `PI_CODING_AGENT_DIR=<out-dir>/pi-agent` (isolated `quietStartup`/telemetry-off settings, without retaining host credentials), `PI_OFFLINE=1`, and `PI_SKIP_VERSION_CHECK=1`; when needed, only the Cursor API key is passed to the child environment, so host extensions, skills, MCP config, update banners, and package-update notices no longer pollute visual evidence.
+- Start the visual-smoke tmux session in `--cwd` with a non-login shell, eliminating `shell-init: getcwd` noise from a stale tmux-server working directory.
+- Forward `--session-id` to pi only when explicitly provided, so fresh captures no longer show the new-session warning line; the HTML render labels pi-assigned sessions instead of failing.
+
+## 0.3.5 - 2026-08-18
+
+### Fixed
+
+- Keep billed `getUsage()` rows as spend only. Occupancy `totalTokens` uses replayable local-context estimates floored at the latest compatible in-window assistant measurement, so stale or cumulative Cursor totals cannot restick the footer or retrigger auto-compact (#204).
+- Leave local-resume persist suppressed across any `turn_end` that fires during compaction summarization; only `session_compact` clears the guard (#223).
+
+## 0.3.4 - 2026-08-18
+
+### Changed
+
+- Pin the runtime to exact `@cursor/sdk@1.0.27` and recapture installed-package ripgrep, stalled-connection, HTTP/1.1, PR-control, closed-writable, and `getUsage` contracts against that pin.
+- Refresh the 37-model Cursor fallback catalog and checkpoint-derived context-window snapshot from the live `@cursor/sdk@1.0.27` runtime, including Grok 4.6.
+- Make `cursor/grok-4.6` the recommended local/smoke default (`:slow` for live evidence). Composer 2.5 remains in the catalog.
+
+### Added
+
+- Apply billed `Agent.getUsage()` spend to pi assistant usage for local and cloud turns. Local billed rows are selected by unseen usage UUIDs (never by a client-minted `run-*` id). Cloud reports prefer mapped `AgentUsage` and keep the REST `/v1/agents/:id/usage` fallback.
+
+### Fixed
+
+- Keep billed token spend when cumulative `inputTokens + outputTokens` exceeds the model context window, while occupancy `totalTokens` uses replayable-context estimates floored at the latest compatible in-window assistant measurement.
+- Ignore assistant occupancy at or before the latest `compactionSummary`, and ignore measurements at or above that summary's `tokensBefore`, so split-turn keep cannot restick the footer at the pre-compaction watermark.
+- Drop compaction-summarizer local-resume handles: `session_before_compact` suppresses persist, and `session_compact` clears any pending handle so the first later `turn_end` cannot flush the one-message summarizer lineage (#223).
+- Write smoke self-test fake `pi` helpers as ESM so Node 24 shebang execution can dump env without `require`.
+
+## 0.3.3 - 2026-08-14
+
+### Changed
+
+- Hardened the precompiled import guard for legacy and future Pi package aliases plus `createRequire()` / `require.resolve()` escape hatches, while preserving the intentional Cursor SDK ripgrep resolution path.
+
+## 0.3.2 - 2026-08-14
+
+### Fixed
+
+- Keep every Cursor runtime subtree that imports Pi host peers in Pi's static extension graph, preventing precompiled native `import()` from bypassing Pi's peer resolver after install-time dev-dependency pruning. This restores Cursor startup, native tool registration, provider turns, session-agent lifecycle, compaction, AGENTS.md deduplication, and stored Pi credential lookup from a pruned install.
+- Retain safe lazy boundaries for the installed Cursor SDK, SQLite store, MCP bridge implementation, and generated fallback catalog, with an import-graph regression test that rejects future native dynamic imports reaching Pi host peers.
+
+## 0.3.1 - 2026-08-14
+
+### Changed
+
+- `scripts/build.mjs` now reaps `dist.staging.<pid>` directories stranded by dead builds (SIGKILL or crash mid-emit) at the start of every build. Only pids already gone at the signal-0 probe are eligible; pid reuse in the tiny probe-to-remove window remains an inherent limitation. Reaping is best-effort: an unreapable strand warns instead of failing the build.
+- `dist/` is now published by reserving the previous tree under a pid-scoped backup, retrying this build's own `rename` instead of waiting on another build, and restoring the backup on publication failure. A rename failure yields only when `dist/` exists and is non-empty (an existence check, not an errno check, so platforms that report a different code for rename-onto-existing-directory still behave correctly); otherwise the staging tree is retained and the rename retried, so this build can publish its own output rather than wait on a concurrent winner's scheduling. Dead-owner backups are recovered on the next build, closing the review-identified windows where a losing build could exit 1 while a concurrent winner was mid-swap or descheduled.
+- `scripts/prepare.mjs` forwards build output on success too, so install-time diagnostics such as the concurrent-swap race-loss warning are no longer swallowed. If both the build and the final dev-dependency prune fail, the prune warning no longer masks the original build error (and may leave the dev toolchain for manual cleanup).
+- New automated coverage for the staging swap: failed TypeScript emits preserve the previous `dist/`; successful builds purge stale files; dead-pid staging dirs are reaped while live ones survive; interrupted publication backups are recovered; the real-process smoke narrows from three twelve-wide rounds to one four-way round; empty directories are not accepted as winners; slow winners cannot time out another build; and persistent publish failures exhaust a bounded retry while restoring the old output.
+
+## 0.3.0 - 2026-08-13
+
+### Changed
+
+- The Pi extension manifest now loads precompiled `dist/index.js` instead of transpiling `src/index.ts` through jiti. This reduces load cost on cold starts and after cache invalidation (fresh installs, `pi update`, cache eviction); warm starts with a hot jiti cache were already near parity. A `prepare` lifecycle script builds `dist/` on install and update (including Pi's `npm install --omit=dev` flow) and prunes the dev toolchain back out afterwards.
+
 ## 0.2.0 - 2026-08-06
 
 ### Added

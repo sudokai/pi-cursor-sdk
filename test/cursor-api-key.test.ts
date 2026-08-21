@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	CURSOR_API_KEY_CONFIG_VALUE,
 	resolveCursorApiKey,
+	resolveCursorPrimaryAuthPath,
 	resolveCursorRuntimeApiKey,
 } from "../src/cursor-api-key.js";
 
@@ -66,6 +67,19 @@ describe("cursor-api-key helpers", () => {
 		process.env.CURSOR_API_KEY = "env-key-123";
 
 		expect(await resolveCursorRuntimeApiKey()).toBe("env-key-123");
+	});
+
+	it("uses ~/.pi/agent/auth.json when pi does not expose getAgentDir", () => {
+		const fakeHome = mkdtempSync(join(tmpdir(), "pi-cursor-api-key-home-"));
+		const originalHome = process.env.HOME;
+		process.env.HOME = fakeHome;
+		try {
+			expect(resolveCursorPrimaryAuthPath({})).toBe(join(fakeHome, ".pi/agent/auth.json"));
+		} finally {
+			if (originalHome === undefined) delete process.env.HOME;
+			else process.env.HOME = originalHome;
+			rmSync(fakeHome, { recursive: true, force: true });
+		}
 	});
 
 	it("falls back to ~/.prime/agent/auth.json when the primary agent dir has no cursor key", async () => {

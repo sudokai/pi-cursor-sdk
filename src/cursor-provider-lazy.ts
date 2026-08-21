@@ -7,8 +7,10 @@ import {
 	type Model,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
+import { streamCursor } from "./cursor-provider.js";
+import { sanitizeCursorProviderError } from "./cursor-provider-errors.js";
 
-function makeProviderLoadErrorMessage(model: Model<Api>, error: unknown): AssistantMessage {
+function makeProviderRuntimeErrorMessage(model: Model<Api>, error: unknown, apiKey?: string): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [],
@@ -25,7 +27,7 @@ function makeProviderLoadErrorMessage(model: Model<Api>, error: unknown): Assist
 		},
 		stopReason: "error",
 		timestamp: Date.now(),
-		errorMessage: `Failed to load Cursor provider runtime: ${error instanceof Error ? error.message : String(error)}`,
+		errorMessage: `Cursor provider runtime failed: ${sanitizeCursorProviderError(error, apiKey)}`,
 	};
 }
 
@@ -37,12 +39,11 @@ export function streamCursorLazy(
 	const outer = createAssistantMessageEventStream();
 	queueMicrotask(async () => {
 		try {
-			const { streamCursor } = await import("./cursor-provider.js");
 			for await (const event of streamCursor(model, context, options)) {
 				outer.push(event);
 			}
 		} catch (error) {
-			const message = makeProviderLoadErrorMessage(model, error);
+			const message = makeProviderRuntimeErrorMessage(model, error, options?.apiKey);
 			outer.push({ type: "error", reason: "error", error: message });
 			outer.end(message);
 		}

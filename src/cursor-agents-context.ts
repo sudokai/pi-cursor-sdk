@@ -12,8 +12,6 @@ import {
 } from "./cursor-setting-sources.js";
 import type { SettingSource } from "@cursor/sdk";
 import type { CursorRuntime } from "./cursor-config.js";
-export { registerCursorAgentsContextDedup, type CursorAgentsContextExtensionApi } from "./cursor-agents-context-registration.js";
-
 export const CURSOR_PRESERVE_PI_AGENTS_MD_ENV = "PI_CURSOR_PRESERVE_PI_AGENTS_MD";
 
 /** Opening tag prefix pi `buildSystemPrompt()` uses for each context file (path attribute only). */

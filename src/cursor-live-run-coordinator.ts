@@ -50,6 +50,7 @@ export interface CursorLiveRun {
 	sessionAgentScopeKey: string;
 	sdkRun?: CursorLiveSdkRun;
 	accounting: CursorLiveRunAccountingState;
+	billedTurnUsage?: CursorSdkTurnUsage;
 	pendingEvents: CursorLiveQueuedEvent[];
 	textDeltas: string[];
 	emittedText: string;

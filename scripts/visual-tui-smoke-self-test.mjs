@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, utimesSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter } from "node:path";
 import { dirname, join } from "node:path";
@@ -24,7 +24,26 @@ function parseEnvCapture(path) {
 }
 
 export function runVisualSmokeSelfTest(deps) {
-	const { ROOT, DEFAULT_MODE, DEFAULT_MODEL, DEFAULT_SETTING_SOURCES, DEBUG_ENV_NAMES, shellQuote, parseArgs, snapshotJsonlMtimes, findLatestJsonl, sealedNodePath, resolveCommand, requireNode, requireCommand, buildLaunchPlan, run, runVisualSmoke } = deps;
+	const {
+		ROOT,
+		DEFAULT_MODE,
+		DEFAULT_MODEL,
+		DEFAULT_SETTING_SOURCES,
+		DEBUG_ENV_NAMES,
+		shellQuote,
+		parseArgs,
+		snapshotJsonlMtimes,
+		findLatestJsonl,
+		sealedNodePath,
+		resolveCommand,
+		requireNode,
+		requireCommand,
+		buildLaunchPlan,
+		ensureArtifactDirectory,
+		writeUtf8,
+		run,
+		runVisualSmoke,
+	} = deps;
 	const tempDir = mkdtempSync(join(tmpdir(), "pi-cursor-sdk-visual-self-test-"));
 	try {
 		const binDir = join(tempDir, "bin");
@@ -33,9 +52,10 @@ export function runVisualSmokeSelfTest(deps) {
 		const fakeNode = join(binDir, "node");
 		const fakeNodeMarker = join(tempDir, "fake-node-used");
 		const envCapture = join(tempDir, "fake-pi.env");
+		const tmuxEnvCapture = join(tempDir, "fake-tmux.env");
 		writeFileSync(
 			fakePi,
-			`#!/usr/bin/env node\nconst { writeFileSync } = require("node:fs");\nwriteFileSync(${JSON.stringify(envCapture)}, Object.entries(process.env).map(([key, value]) => key + "=" + (value ?? "")).join("\\n") + "\\n", "utf8");\n`,
+			`#!/usr/bin/env node\nimport { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(envCapture)}, Object.entries(process.env).map(([key, value]) => key + "=" + (value ?? "")).join("\\n") + "\\n", "utf8");\n`,
 			"utf8",
 		);
 		writeFileSync(fakeNode, `#!/bin/sh\necho fake-node-used > ${shellQuote(fakeNodeMarker)}\nexit 99\n`, "utf8");
@@ -68,6 +88,43 @@ export function runVisualSmokeSelfTest(deps) {
 		assertSelfTest(requireCommand("pi", { envPath: hostilePath, env: { ...process.env, PATH: sealedHostilePath } }) === fakePi, "pi prereq should use sealed PATH when executing the shim");
 		assertSelfTest(!existsSync(fakeNodeMarker), "pi prereq should not use hostile fake node");
 
+		let symlinkSelfTestRan = false;
+		try {
+			const symlinkTarget = join(tempDir, "symlink-target.txt");
+			const symlinkDestination = join(tempDir, "symlink-destination.txt");
+			const symlinkParent = join(tempDir, "symlink-parent");
+			const symlinkParentDestination = join(symlinkParent, "artifact.txt");
+			writeFileSync(symlinkTarget, "sentinel\n", "utf8");
+			symlinkSync(symlinkTarget, symlinkDestination);
+			symlinkSync(tempDir, symlinkParent);
+			let destinationRejected = false;
+			try {
+				writeUtf8(symlinkDestination, "must not overwrite\n");
+			} catch {
+				destinationRejected = true;
+			}
+			assertSelfTest(destinationRejected, "artifact writes must reject a symlinked destination");
+			assertSelfTest(readFileSync(symlinkTarget, "utf8") === "sentinel\n", "symlink destination rejection must not follow the target");
+			let ancestorRejected = false;
+			try {
+				writeUtf8(symlinkParentDestination, "must not write through ancestor\n");
+			} catch {
+				ancestorRejected = true;
+			}
+			assertSelfTest(ancestorRejected, "artifact writes must reject a symlinked ancestor");
+			let directoryRejected = false;
+			try {
+				ensureArtifactDirectory(symlinkParent);
+			} catch {
+				directoryRejected = true;
+			}
+			assertSelfTest(directoryRejected, "artifact directory checks must reject symlinked paths");
+			symlinkSelfTestRan = true;
+		} catch (error) {
+			if (!['EACCES', 'EPERM', 'UNKNOWN'].includes(error?.code)) throw error;
+		}
+		if (!symlinkSelfTestRan) console.log("[visual-smoke] symlink self-test skipped: symlink creation is unavailable");
+
 		const baseOptions = {
 			ext: ROOT,
 			cwd: ROOT,
@@ -89,6 +146,9 @@ export function runVisualSmokeSelfTest(deps) {
 		assertSelfTest(defaults.get("PI_CURSOR_SETTING_SOURCES") === "none", "setting sources must default to none");
 		assertSelfTest(defaults.get("PI_CURSOR_PI_TOOL_BRIDGE") === "0", "bridge must default off");
 		assertSelfTest(defaults.get("PI_CURSOR_EXPOSE_BUILTIN_TOOLS") === "0", "built-in exposure must default off");
+		assertSelfTest(defaults.get("PI_CODING_AGENT_DIR") === join(tempDir, "pi-agent"), "agent dir must be isolated under out-dir");
+		assertSelfTest(defaults.get("PI_OFFLINE") === "1", "startup network operations must be off");
+		assertSelfTest(defaults.get("PI_SKIP_VERSION_CHECK") === "1", "pi.dev version check must be off");
 		for (const name of DEBUG_ENV_NAMES) {
 			assertSelfTest(plan.clearEnvNames.includes(name), `${name} must be cleared by default`);
 		}
@@ -144,14 +204,35 @@ export function runVisualSmokeSelfTest(deps) {
 		const deleteBufferMarker = join(tempDir, "delete-buffer-called");
 		writeFileSync(
 			fakeTmux,
-			`#!/bin/sh\ncase "$1" in\n  -V) echo 'tmux fake'; exit 0 ;;\n  new-session) exit 0 ;;\n  load-buffer) cat >/dev/null; exit 0 ;;\n  paste-buffer) exit 77 ;;\n  delete-buffer) echo deleted > ${shellQuote(deleteBufferMarker)}; exit 0 ;;\n  kill-session) exit 0 ;;\n  *) echo "unexpected tmux command: $*" >&2; exit 64 ;;\nesac\n`,
+			`#!/bin/sh\nif [ "$1" = "-L" ]; then shift 2; fi\ncase "$1" in\n  -V) echo 'tmux fake'; exit 0 ;;\n  new-session) env > ${shellQuote(tmuxEnvCapture)}; exit 0 ;;\n  load-buffer) cat >/dev/null; exit 0 ;;\n  paste-buffer) exit 77 ;;\n  delete-buffer) echo deleted > ${shellQuote(deleteBufferMarker)}; exit 0 ;;\n  kill-session) exit 0 ;;\n  *) echo "unexpected tmux command: $*" >&2; exit 64 ;;\nesac\n`,
 			"utf8",
 		);
 		chmodSync(fakeTmux, 0o755);
 		const originalPath = process.env.PATH;
+		const inheritedEnv = {
+			CURSOR_API_KEY: process.env.CURSOR_API_KEY,
+			AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+			GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+			VISUAL_SMOKE_HOST_SECRET: process.env.VISUAL_SMOKE_HOST_SECRET,
+			HOME: process.env.HOME,
+			USER: process.env.USER,
+			SHELL: process.env.SHELL,
+			PI_CURSOR_TURN_ENDED_WAIT_MS: process.env.PI_CURSOR_TURN_ENDED_WAIT_MS,
+			NODE_NO_WARNINGS: process.env.NODE_NO_WARNINGS,
+		};
 		try {
 			process.env.PATH = hostilePath;
+			process.env.CURSOR_API_KEY = "self-test-cursor-key";
+			process.env.AWS_ACCESS_KEY_ID = "aws-secret-must-not-inherit";
+			process.env.GITHUB_TOKEN = "github-secret-must-not-inherit";
+			process.env.VISUAL_SMOKE_HOST_SECRET = "arbitrary-secret-must-not-inherit";
+			process.env.HOME = join(tempDir, "home");
+			process.env.USER = "visual-self-test";
+			process.env.SHELL = "/bin/sh";
+			process.env.PI_CURSOR_TURN_ENDED_WAIT_MS = "1234";
+			process.env.NODE_NO_WARNINGS = "1";
 			let pasteFailed = false;
+			let pasteError = "";
 			try {
 				runVisualSmoke({
 					...baseOptions,
@@ -163,18 +244,37 @@ export function runVisualSmokeSelfTest(deps) {
 					historyLines: 100,
 				});
 			} catch (error) {
-				pasteFailed = /paste-buffer failed/.test(error instanceof Error ? error.message : String(error));
+				pasteError = error instanceof Error ? error.message : String(error);
+				pasteFailed = /paste-buffer failed/.test(pasteError);
 			}
-			assertSelfTest(pasteFailed, "fake tmux paste failure should exercise prompt-buffer cleanup path");
+			assertSelfTest(pasteFailed, `fake tmux paste failure should exercise prompt-buffer cleanup path: ${pasteError || "no error"}`);
 			assertSelfTest(existsSync(deleteBufferMarker), "prompt tmux buffer should be deleted when paste/send fails");
+			assertSelfTest(!existsSync(join(tempDir, "pi-agent", "auth.json")), "visual artifacts must not retain host auth.json");
+			const capturedTmuxEnv = parseEnvCapture(tmuxEnvCapture);
+			assertSelfTest(capturedTmuxEnv.get("CURSOR_API_KEY") === "self-test-cursor-key", "tmux child should inherit only the explicit Cursor API key");
+			assertSelfTest(capturedTmuxEnv.get("PATH") === sealedHostilePath, "tmux child should use the sealed runtime PATH");
+			assertSelfTest(capturedTmuxEnv.get("HOME") === join(tempDir, "home"), "tmux child should preserve HOME");
+			assertSelfTest(capturedTmuxEnv.get("USER") === "visual-self-test", "tmux child should preserve USER");
+			assertSelfTest(capturedTmuxEnv.get("TERM") === "xterm-256color", "tmux child should preserve the smoke TERM");
+			assertSelfTest(capturedTmuxEnv.get("SHELL") === "/bin/sh", "tmux child should preserve SHELL");
+			assertSelfTest(capturedTmuxEnv.get("PI_CURSOR_TURN_ENDED_WAIT_MS") === "1234", "tmux child should preserve supported Cursor settings");
+			assertSelfTest(capturedTmuxEnv.get("NODE_NO_WARNINGS") === "1", "tmux child should preserve required Node runtime settings");
+			for (const name of ["AWS_ACCESS_KEY_ID", "GITHUB_TOKEN", "VISUAL_SMOKE_HOST_SECRET"]) {
+				assertSelfTest(!capturedTmuxEnv.has(name), `${name} must not reach the private tmux child`);
+			}
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
 			else process.env.PATH = originalPath;
+			for (const [name, value] of Object.entries(inheritedEnv)) {
+				if (value === undefined) delete process.env[name];
+				else process.env[name] = value;
+			}
 		}
 
 		writeFileSync(
 			fakeTmux,
 			`#!/bin/sh
+if [ "$1" = "-L" ]; then shift 2; fi
 case "$1" in
   -V) echo 'tmux fake'; exit 0 ;;
   new-session) exit 0 ;;
