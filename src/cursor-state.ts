@@ -262,16 +262,20 @@ function updateCursorStatus(ctx: CursorStatusContext & Pick<ExtensionContext, "m
 	const resolution = resolveCursorStatusRuntime(ctx);
 	const modeResolution = resolveCursorAgentMode();
 	const mode = modeResolution.kind === "invalid" ? "invalid" : modeResolution.mode;
-	if (resolution.kind === "invalid") {
-		ctx.ui.setStatus("cursor", formatCursorStatus("invalid", undefined, mode));
-		return;
-	}
-	const runtime = resolution.runtime.value;
-	const fast = runtime === "cloud" ? undefined : metadata?.supportsFast ? getEffectiveFast(model.id) : undefined;
-	ctx.ui.setStatus(
-		"cursor",
-		formatCursorStatus(runtime, fast, mode, resolution.useHttp1ForAgent.value),
-	);
+	const statusText =
+		resolution.kind === "invalid"
+			? formatCursorStatus("invalid", undefined, mode)
+			: formatCursorStatus(
+					resolution.runtime.value,
+					resolution.runtime.value === "cloud"
+						? undefined
+						: metadata?.supportsFast
+							? getEffectiveFast(model.id)
+							: undefined,
+					mode,
+					resolution.useHttp1ForAgent.value,
+				);
+	ctx.ui.setStatus("cursor", ctx.ui.theme.fg("muted", statusText));
 }
 
 function getCurrentCursorMetadata(ctx: Pick<ExtensionContext, "model">) {

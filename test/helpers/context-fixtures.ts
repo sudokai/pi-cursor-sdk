@@ -72,7 +72,9 @@ function createMinimalExtensionUi(): ExtensionContext["ui"] {
 		addAutocompleteProvider: vi.fn(),
 		setEditorComponent: vi.fn(),
 		getEditorComponent: vi.fn(() => undefined),
-		theme: {} as ExtensionContext["ui"]["theme"],
+		theme: {
+			fg: (_style: string, text: string) => text,
+		} as ExtensionContext["ui"]["theme"],
 		getAllThemes: vi.fn(() => []),
 		getTheme: vi.fn(() => undefined),
 		setTheme: vi.fn(() => ({ success: true })),

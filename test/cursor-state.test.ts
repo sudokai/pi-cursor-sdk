@@ -161,6 +161,27 @@ describe("Cursor runtime state", () => {
 		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", "cursor:local · fast:off");
 	});
 
+	it("renders Cursor footer status with muted theme color", async () => {
+		const themedFg = vi.fn((style: string, text: string) => `<${style}>${text}</${style}>`);
+		const pi = createPiHarness();
+		const ctx = createExtensionTestContext({
+			model: {
+				...makeModel("gpt-5.5@1m"),
+				provider: "cursor",
+				api: "cursor-sdk",
+			},
+			ui: {
+				theme: { fg: themedFg } as unknown as ExtensionContext["ui"]["theme"],
+			},
+		});
+		registerCursorRuntimeControls(pi);
+
+		await pi.invokeEventWithContext("session_start", { type: "session_start", reason: "startup" }, ctx);
+
+		expect(themedFg).toHaveBeenCalledWith("muted", "cursor:local · fast:off");
+		expect(ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", "<muted>cursor:local · fast:off</muted>");
+	});
+
 	it("forces Cursor SDK plan mode with --cursor-mode without writing session state", async () => {
 		const { pi, ctx } = createCursorRuntimeHarness({ modelId: "gpt-5.5@1m", cursorModeFlag: "plan" });
 
