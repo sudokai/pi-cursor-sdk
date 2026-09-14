@@ -262,6 +262,16 @@ export function isUnauthenticatedConnectError(error: unknown): boolean {
 	return classifyCursorConnectError(error)?.kind === "unauthenticated";
 }
 
+/**
+ * True when the Cursor SDK reports an unauthenticated, unauthorized, or expired
+ * access token failure (ConnectError unauthenticated / code 16, or AuthenticationError).
+ * This is not proof that the API key is missing.
+ */
+export function isCursorSdkUnauthenticatedFailure(error: unknown): boolean {
+	if (isUnauthenticatedConnectError(error)) return true;
+	return getErrorName(error, asRecord(error)) === "AuthenticationError";
+}
+
 function isLikelyNetworkTimeout(message: string): boolean {
 	return (
 		/\b(ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN|NGHTTP2_ENHANCE_YOUR_CALM|ERR_HTTP2_STREAM_ERROR|ERR_HTTP2_SESSION_ERROR)\b/i.test(

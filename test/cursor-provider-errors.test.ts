@@ -5,16 +5,15 @@ import {
 	isCursorSdkConnectionStalledError,
 	formatCursorSdkAbortMessage,
 	formatCursorSdkRunFailureDetail,
+	isCursorSdkUnauthenticatedFailure,
 	isUnauthenticatedConnectError,
 	resolveCursorSdkAbortCause,
 	sanitizeCursorProviderError,
 } from "../src/cursor-provider-errors.js";
+import { makeUnauthenticatedConnectError } from "./helpers/cursor-unauthenticated-connect-error.js";
 
-function makeUnauthenticatedConnectError(): Error & { rawMessage: string; code: number; metadata: Headers } {
-	const error = new Error("[unauthenticated] Error") as Error & { rawMessage: string; code: number; metadata: Headers };
-	error.name = "ConnectError";
-	error.rawMessage = "Error";
-	error.code = 16;
+function makeUnauthenticatedConnectErrorWithAuthHeader(): Error & { rawMessage: string; code: number; metadata: Headers } {
+	const error = makeUnauthenticatedConnectError() as Error & { rawMessage: string; code: number; metadata: Headers };
 	error.metadata = new Headers({ authorization: "Bearer secret-key" });
 	return error;
 }
@@ -238,6 +237,11 @@ describe("cursor-provider-errors", () => {
 		expect(cloudMessage).not.toMatch(/secret-key|alice|pw/);
 	});
 
+	it("treats installed AuthenticationError as an unauthenticated SDK failure", () => {
+		expect(isCursorSdkUnauthenticatedFailure(new AuthenticationError("expired token"))).toBe(true);
+		expect(isCursorSdkUnauthenticatedFailure(new Error("boom"))).toBe(false);
+	});
+
 	it("preserves scrubbed installed IntegrationNotConnectedError remediation", () => {
 		const error = new IntegrationNotConnectedError(
 			"[integration_not_connected] GitHub integration requires Bearer secret-key.",
@@ -309,10 +313,11 @@ describe("cursor-provider-errors", () => {
 	});
 
 	it("maps Cursor SDK unauthenticated ConnectError to actionable auth guidance", () => {
-		const error = makeUnauthenticatedConnectError();
+		const error = makeUnauthenticatedConnectErrorWithAuthHeader();
 		const message = sanitizeCursorProviderError(error, "secret-key");
 
 		expect(isUnauthenticatedConnectError(error)).toBe(true);
+		expect(isCursorSdkUnauthenticatedFailure(error)).toBe(true);
 		expect(message).toContain("invalid or unauthorized");
 		expect(message).toContain("/login");
 		expect(message).toContain("CURSOR_API_KEY");

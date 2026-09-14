@@ -16,6 +16,7 @@ import {
 	requireCursorApiKey,
 	resolveCursorProviderTurnConfig,
 } from "./cursor-provider-turn-prepare.js";
+import { prepareAndSendCursorTurnRetryingStaleAuth } from "./cursor-provider-stale-auth-retry.js";
 import { sendCursorProviderTurn } from "./cursor-provider-turn-send.js";
 import type {
 	CursorProviderTurnPrepareResult,
@@ -96,24 +97,32 @@ export class CursorProviderTurnRunner {
 			}
 			this.throwIfAborted();
 
-			this.resolvedApiKey = requireCursorApiKey(options);
-			prepared = await prepareCursorProviderTurn({
-				params: this.params,
-				cwd,
-				resolvedApiKey: this.resolvedApiKey,
+			const resolvedApiKey = requireCursorApiKey(options);
+			this.resolvedApiKey = resolvedApiKey;
+			({ prepared, sendResult } = await prepareAndSendCursorTurnRetryingStaleAuth({
+				prepareTurn: async () => {
+					// Assign before send so a throwing send still has a prepared turn for cleanup.
+					prepared = await prepareCursorProviderTurn({
+						params: this.params,
+						cwd,
+						resolvedApiKey,
+						sdkEventDebug: this.sdkEventDebug,
+						throwIfAborted: () => this.throwIfAborted(),
+						resolvedConfig,
+					});
+					return prepared;
+				},
+				sendTurn: (turn) =>
+					sendCursorProviderTurn({
+						params: this.params,
+						prepared: turn,
+						sdkEventDebug: this.sdkEventDebug,
+						sdkProcessErrorGuard,
+						throwIfAborted: () => this.throwIfAborted(),
+						resolvedApiKey,
+					}),
 				sdkEventDebug: this.sdkEventDebug,
-				throwIfAborted: () => this.throwIfAborted(),
-				resolvedConfig,
-			});
-
-			sendResult = await sendCursorProviderTurn({
-				params: this.params,
-				prepared,
-				sdkEventDebug: this.sdkEventDebug,
-				sdkProcessErrorGuard,
-				throwIfAborted: () => this.throwIfAborted(),
-				resolvedApiKey: this.resolvedApiKey,
-			});
+			}));
 			const { send } = sendResult;
 
 			if (prepared.runtime.kind === "live") {

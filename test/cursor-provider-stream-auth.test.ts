@@ -8,6 +8,7 @@ import {
 	makeModel,
 	makeContext,
 	collectEvents,
+	getDoneEvent,
 	getErrorEvent,
 	getEventsOfType,
 	hasEventType,
@@ -17,24 +18,13 @@ import {
 	asMockSdkAgent,
 	asMockCursorRun,
 } from "./helpers/cursor-provider-harness.js";
+import { makeUnauthenticatedConnectError } from "./helpers/cursor-unauthenticated-connect-error.js";
 import { CursorPiToolBridgeRunImpl } from "../src/cursor-pi-tool-bridge-run.js";
 import { __testUtils as cursorSdkProcessGuardTestUtils } from "../src/cursor-sdk-process-error-guard.js";
 import { streamCursor } from "../src/cursor-provider.js";
 import { writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-function makeUnauthenticatedConnectError(): Error & { rawMessage: string; code: number } {
-	const error = new Error("[unauthenticated] Error") as Error & { rawMessage: string; code: number };
-	error.name = "ConnectError";
-	error.rawMessage = "Error";
-	error.code = 16;
-	error.stack =
-		"ConnectError: [unauthenticated] Error\n" +
-		"    at file:///repo/node_modules/@connectrpc/connect/dist/esm/protocol-connect/error-json.js:53:19\n" +
-		"    at file:///repo/node_modules/@cursor/sdk/dist/esm/index.js:8:1086456";
-	return error;
-}
 
 describe("streamCursor auth and abort", () => {
 	beforeEach(resetCursorProviderTestState);
@@ -191,6 +181,129 @@ describe("streamCursor auth and abort", () => {
 		expect(message).toContain("service account API key");
 		expect(message).toContain("Team Admin API keys are not supported");
 		expect(message).not.toContain("super-secret-key-12345");
+	});
+
+	it("does not recreate a freshly created local agent when the first send is unauthenticated", async () => {
+		const mockSend = vi.fn().mockRejectedValue(makeUnauthenticatedConnectError());
+		mockCreatedAgent({ send: mockSend });
+
+		const events = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+		expect(getErrorEvent(events).error.errorMessage).toContain("invalid or unauthorized");
+		expect(mockedCreate).toHaveBeenCalledTimes(1);
+		expect(mockSend).toHaveBeenCalledTimes(1);
+	});
+
+	it("recreates a reused pooled local agent once when send fails as unauthenticated", async () => {
+		const firstSend = vi
+			.fn()
+			.mockResolvedValueOnce(
+				asMockCursorRun({
+					id: "run-1",
+					agentId: "agent-1",
+					status: "finished",
+					wait: vi.fn().mockResolvedValue({ id: "run-1", status: "finished", result: "ok" }),
+				}),
+			)
+			.mockRejectedValueOnce(makeUnauthenticatedConnectError());
+		const secondSend = vi.fn().mockResolvedValue(
+			asMockCursorRun({
+				id: "run-2",
+				agentId: "agent-2",
+				status: "finished",
+				wait: vi.fn().mockResolvedValue({ id: "run-2", status: "finished", result: "recovered" }),
+			}),
+		);
+		mockedCreate
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-1",
+					send: firstSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			)
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-2",
+					send: secondSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			);
+
+		await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+		const recovered = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+		expect(getDoneEvent(recovered).reason).toBe("stop");
+		expect(hasEventType(recovered, "error")).toBe(false);
+		expect(mockedCreate).toHaveBeenCalledTimes(2);
+		expect(firstSend).toHaveBeenCalledTimes(2);
+		expect(secondSend).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not retry a non-auth send failure on a reused pooled local agent", async () => {
+		const firstSend = vi
+			.fn()
+			.mockResolvedValueOnce(
+				asMockCursorRun({
+					id: "run-1",
+					agentId: "agent-1",
+					status: "finished",
+					wait: vi.fn().mockResolvedValue({ id: "run-1", status: "finished", result: "ok" }),
+				}),
+			)
+			.mockRejectedValueOnce(new Error("boom"));
+		mockedCreate.mockResolvedValue(
+			asMockSdkAgent({
+				agentId: "agent-1",
+				send: firstSend,
+				[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+			}),
+		);
+
+		await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+		const failed = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+		expect(getErrorEvent(failed).error.errorMessage).toBe("boom");
+		expect(mockedCreate).toHaveBeenCalledTimes(1);
+		expect(firstSend).toHaveBeenCalledTimes(2);
+	});
+
+	it("surfaces auth guidance when pooled-agent unauthenticated retry also fails", async () => {
+		const firstSend = vi
+			.fn()
+			.mockResolvedValueOnce(
+				asMockCursorRun({
+					id: "run-1",
+					agentId: "agent-1",
+					status: "finished",
+					wait: vi.fn().mockResolvedValue({ id: "run-1", status: "finished", result: "ok" }),
+				}),
+			)
+			.mockRejectedValueOnce(makeUnauthenticatedConnectError());
+		const secondSend = vi.fn().mockRejectedValue(makeUnauthenticatedConnectError());
+		mockedCreate
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-1",
+					send: firstSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			)
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-2",
+					send: secondSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			);
+
+		await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+		const failed = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+		expect(getErrorEvent(failed).error.errorMessage).toContain("invalid or unauthorized");
+		expect(mockedCreate).toHaveBeenCalledTimes(2);
+		expect(firstSend).toHaveBeenCalledTimes(2);
+		expect(secondSend).toHaveBeenCalledTimes(1);
 	});
 
 	it("labels unauthenticated ConnectError from run.wait as an auth failure", async () => {
