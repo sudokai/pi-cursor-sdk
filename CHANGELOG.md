@@ -5,6 +5,7 @@
 ### Fixed
 
 - Recreate a reused pooled local Cursor SDK agent and retry `Agent.send()` once in the same turn when the SDK reports unauthenticated/expired auth after idle, instead of asking for `/login` while `auth.json` / `CURSOR_API_KEY` is still valid. A freshly created agent or a second unauthenticated failure still surfaces the existing auth guidance.
+- Load user-invoked `/skill:name` skills through `cursor_activate_skill` even when `disable-model-invocation` keeps them out of the Cursor catalog, instead of returning `Skill not available`.
 
 ## 0.3.6 - 2026-08-18
 

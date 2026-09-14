@@ -53,6 +53,70 @@ describe("formatCursorSkillsForPrompt", () => {
 	});
 });
 
+describe("cursor_activate_skill explicit-only lookup", () => {
+	it("loads a disable-model-invocation skill by name without listing it in the catalog", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "pi-cursor-skill-explicit-"));
+		const skillDir = join(dir, "manual-only");
+		await mkdir(skillDir, { recursive: true });
+		const skillPath = join(skillDir, "SKILL.md");
+		await writeFile(
+			skillPath,
+			"---\nname: manual-only\ndescription: Manual\ndisable-model-invocation: true\n---\n# Manual Only\nRestate plainly.\n",
+		);
+		const visible = makeSkill({
+			name: "global-skill",
+			description: "Global skill",
+			filePath: join(dir, "global-skill", "SKILL.md"),
+		});
+		const explicit = makeSkill({
+			name: "manual-only",
+			description: "Manual",
+			filePath: skillPath,
+			disableModelInvocation: true,
+		});
+		const pi = createPiHarness({ activeTools: ["read"] });
+		registerCursorSkillTool(pi);
+		const model = makeModel("composer-2.5");
+
+		const result = await pi.invokeEvent(
+			"before_agent_start",
+			{
+				type: "before_agent_start",
+				prompt: "hello",
+				systemPrompt: "System prompt.",
+				systemPromptOptions: { ...createDefaultSystemPromptOptions(dir), skills: [visible, explicit] },
+			} satisfies BeforeAgentStartEvent,
+			{ model, cwd: dir },
+		);
+
+		expect(result?.systemPrompt).toContain("<name>global-skill</name>");
+		expect(result?.systemPrompt).not.toContain("manual-only");
+
+		const tool = getHarnessRegisteredTool(pi._tools, CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		const loaded = await tool.execute(
+			"call-explicit",
+			{ name: "manual-only" },
+			undefined,
+			undefined,
+			createExtensionTestContext({ model, cwd: dir }),
+		);
+		const text = loaded.content?.[0]?.type === "text" ? loaded.content[0].text : "";
+		expect(text).toContain("<skill_content name=\"manual-only\">");
+		expect(text).toContain("# Manual Only");
+		expect(loaded.details).toMatchObject({ availableSkillNames: ["global-skill"] });
+
+		await expect(
+			tool.execute(
+				"call-missing",
+				{ name: "no-such-skill" },
+				undefined,
+				undefined,
+				createExtensionTestContext({ model, cwd: dir }),
+			),
+		).rejects.toThrow(/Catalog skills: global-skill/);
+	});
+});
+
 describe("resolveCursorSkillSystemPrompt", () => {
 	const cursorModel = makeModel("composer-2.5");
 	const otherModel = { provider: "anthropic", id: "claude-sonnet-4-5" } as ReturnType<typeof makeModel>;

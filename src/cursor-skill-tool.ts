@@ -47,16 +47,21 @@ function escapeXml(value: string): string {
 		.replace(/'/g, "&apos;");
 }
 
-function getVisibleSkills(skills: readonly Skill[] | undefined): Skill[] {
-	return (skills ?? []).filter((skill) => !skill.disableModelInvocation);
+function getVisibleSkills(skills: Iterable<Skill> | undefined): Skill[] {
+	if (!skills) return [];
+	return [...skills].filter((skill) => !skill.disableModelInvocation);
 }
 
 function setCurrentSkills(skills: readonly Skill[] | undefined): void {
-	currentSkillsByName = new Map(getVisibleSkills(skills).map((skill) => [skill.name, skill]));
+	// Keep explicit-only skills (`disable-model-invocation`) in the lookup map so
+	// `/skill:name` can still load them. Do not list them in the prompt catalog.
+	currentSkillsByName = new Map((skills ?? []).map((skill) => [skill.name, skill]));
 }
 
-function getAvailableSkillNames(): string[] {
-	return [...currentSkillsByName.keys()].sort();
+function getCatalogSkillNames(): string[] {
+	return getVisibleSkills(currentSkillsByName.values())
+		.map((skill) => skill.name)
+		.sort();
 }
 
 function resolveEffectiveRuntimeForSkillLifecycle(
@@ -191,7 +196,7 @@ function buildActivationDetails(skill: Skill | undefined, resources: string[] = 
 		filePath: skill?.filePath,
 		baseDir: skill ? dirname(skill.filePath) : undefined,
 		resources,
-		availableSkillNames: getAvailableSkillNames(),
+		availableSkillNames: getCatalogSkillNames(),
 	};
 }
 
@@ -221,13 +226,17 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 	pi.registerTool({
 		name: CURSOR_ACTIVATE_SKILL_TOOL_NAME,
 		label: "Cursor skill",
-		description: "Load full pi Agent Skill instructions for Cursor. Use with a skill name from the current <available_skills> catalog before applying that skill.",
-		promptSnippet: "Load full pi Agent Skill instructions for a listed skill before Cursor applies that skill",
+		description:
+			"Load full pi Agent Skill instructions for Cursor. Use with a skill name from the current <available_skills> catalog, or a skill the user invoked with /skill:name, before applying that skill.",
+		promptSnippet: "Load full pi Agent Skill instructions for a listed or user-invoked skill before Cursor applies that skill",
 		parameters: Type.Object({
-			name: Type.String({ description: "Skill name from the current <available_skills> catalog" }),
+			name: Type.String({
+				description:
+					"Skill name from the current <available_skills> catalog, or a user-invoked /skill:name even when that skill is omitted from the catalog",
+			}),
 		}),
 		promptGuidelines: [
-			`Use ${CURSOR_ACTIVATE_SKILL_TOOL_NAME} only for skill names listed in the current <available_skills> catalog.`,
+			`Use ${CURSOR_ACTIVATE_SKILL_TOOL_NAME} for names in the current <available_skills> catalog, or a user-invoked /skill:name even if that name is omitted from the catalog.`,
 			"After loading a skill, follow its instructions and resolve relative skill paths against the returned skill directory.",
 		],
 		async execute(_toolCallId, params) {
@@ -238,7 +247,7 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 			const skill = currentSkillsByName.get(requestedName);
 			if (!skill) {
 				throw new Error(
-					`Skill not available: ${requestedName}. Available skills: ${getAvailableSkillNames().join(", ") || "none"}.`,
+					`Skill not available: ${requestedName}. Catalog skills: ${getCatalogSkillNames().join(", ") || "none"}.`,
 				);
 			}
 
