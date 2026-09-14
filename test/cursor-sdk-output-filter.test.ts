@@ -27,6 +27,14 @@ describe("isCursorSdkStartupNoise", () => {
 		).toBe(true);
 	});
 
+	it("filters shell-parser tree-sitter native unavailability warnings", () => {
+		expect(
+			isCursorSdkStartupNoise(
+				"shell-parser: tree-sitter natives are unavailable in this artifact; shell command analysis degrades to parsingFailed",
+			),
+		).toBe(true);
+	});
+
 	it("does not filter unrelated provider output", () => {
 		expect(isCursorSdkStartupNoise("VISIBLE non-startup stdout")).toBe(false);
 		expect(isCursorSdkStartupNoise("Agent finished successfully")).toBe(false);
