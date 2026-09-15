@@ -24,7 +24,12 @@ import { applyCursorUsage } from "./cursor-usage-accounting.js";
 import { CursorPartialContentEmitter } from "./cursor-partial-content-emitter.js";
 import { emitDisplayOnlyTraceBlock } from "./cursor-display-only-trace.js";
 import { trimCurrentTurnAlreadyEmittedCursorText } from "./cursor-run-final-text.js";
-import { formatCursorSdkAbortMessage, resolveCursorSdkAbortCause } from "./cursor-provider-errors.js";
+import {
+	AUTH_CURSOR_SDK_ERROR_MESSAGE,
+	CursorStaleLocalAuthRetryError,
+	formatCursorSdkAbortMessage,
+	resolveCursorSdkAbortCause,
+} from "./cursor-provider-errors.js";
 import { formatInactiveCursorReplayTrace } from "./cursor-native-replay-trace.js";
 import { partitionNativeToolsByActiveContext } from "./cursor-native-replay-routing.js";
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
@@ -62,6 +67,13 @@ export function createCursorNativeReplayId(): string {
 
 function getCursorNativeReplayIdFromToolCallId(toolCallId: string): string | undefined {
 	return CURSOR_NATIVE_REPLAY_TOOL_ID_PATTERN.exec(toolCallId)?.[1];
+}
+
+function cursorLiveRunHasUserVisibleProgress(run: CursorLiveRun, turn: CursorLiveTurnState): boolean {
+	if (turn.emittedText.trim().length > 0 || run.emittedText.trim().length > 0) return true;
+	if (run.textDeltas.some((delta) => delta.trim().length > 0)) return true;
+	if (run.pendingEvents.length > 0 || run.recordedToolDisplayIds.length > 0) return true;
+	return false;
 }
 
 export function getPendingCursorLiveRun(context: Context): CursorLiveRun | undefined {
@@ -294,7 +306,13 @@ export async function drainCursorLiveRunTurn(
 	context: Context,
 	run: CursorLiveRun,
 	toolResultInputTokens: number,
-	options: { mode: CursorLiveRunDrainMode; signal?: AbortSignal; debugRecorder?: CursorSdkEventDebugRecorder },
+	options: {
+		mode: CursorLiveRunDrainMode;
+		signal?: AbortSignal;
+		debugRecorder?: CursorSdkEventDebugRecorder;
+		/** When true, unauthorized wait with no user-visible output throws for same-turn recreate. Pre-send drain leaves this unset. */
+		retryStaleAuth?: boolean;
+	},
 ): Promise<CursorLiveRunDrainOutcome> {
 	const debugRecorder = options.debugRecorder ?? run.debugRecorder;
 	debugRecorder?.recordDrainEvent("turn_start", {
@@ -359,6 +377,13 @@ export async function drainCursorLiveRunTurn(
 				return outcome;
 			}
 			if (run.errorMessage) {
+				if (
+					options.retryStaleAuth &&
+					run.errorMessage === AUTH_CURSOR_SDK_ERROR_MESSAGE &&
+					!cursorLiveRunHasUserVisibleProgress(run, turn)
+				) {
+					throw new CursorStaleLocalAuthRetryError();
+				}
 				partial.stopReason = "error";
 				partial.errorMessage = run.errorMessage;
 				stream.push({ type: "error", reason: "error", error: partial });

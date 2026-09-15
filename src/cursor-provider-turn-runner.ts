@@ -16,7 +16,8 @@ import {
 	requireCursorApiKey,
 	resolveCursorProviderTurnConfig,
 } from "./cursor-provider-turn-prepare.js";
-import { prepareAndSendCursorTurnRetryingStaleAuth } from "./cursor-provider-stale-auth-retry.js";
+import { CursorStaleLocalAuthRetryError } from "./cursor-provider-errors.js";
+import { prepareAndSendCursorTurnRetryingStaleAuth, shouldRetryStaleLocalCursorAuthWaitOutcome } from "./cursor-provider-stale-auth-retry.js";
 import { sendCursorProviderTurn } from "./cursor-provider-turn-send.js";
 import type {
 	CursorProviderTurnPrepareResult,
@@ -122,48 +123,51 @@ export class CursorProviderTurnRunner {
 						throwIfAborted: () => this.throwIfAborted(),
 						resolvedApiKey,
 					}),
+				afterSend: async (turn, sent) => {
+					if (turn.runtime.kind === "live") {
+						const livePrepared = requireLocalLivePreparedTurn(turn);
+						liveCompletion = runFinalizer.startLiveRunCompletion({
+							send: sent.send,
+							prepared: livePrepared,
+							modelId: model.id,
+							discardIncompleteTools: (outcome) => discardIncompleteToolsFromPrepared(livePrepared, outcome),
+						});
+						await emitCursorLiveTurn({
+							params: this.params,
+							prepared: livePrepared,
+							sdkEventDebug: this.sdkEventDebug,
+							discardIncompleteTools: (outcome) => discardIncompleteToolsFromPrepared(livePrepared, outcome),
+						});
+						return;
+					}
+
+					const outcomePromise = awaitFinalizeCursorRunOutcome({
+						run: sent.send.run,
+						prepared: turn,
+						cursorAgentMessageOffset: sent.send.cursorAgentMessageOffset,
+						modelId: model.id,
+						signal: options?.signal,
+						runResultFallback: sent.send.run.result,
+						runErrorFallback: sent.send.run.error,
+						resolvedApiKey: this.resolvedApiKey,
+						optionsApiKey: options?.apiKey,
+						sdkEventDebug: this.sdkEventDebug,
+						contextWindowAgentId: turn.contextWindowAgentId,
+					});
+					turn.lifecycle.trackRunCompletion(outcomePromise);
+					const finalized = await outcomePromise;
+					if (shouldRetryStaleLocalCursorAuthWaitOutcome(turn, finalized.outcome)) {
+						throw new CursorStaleLocalAuthRetryError();
+					}
+					await runFinalizer.applyTerminalEvent({
+						kind: "direct",
+						prepared: turn,
+						outcome: finalized.outcome,
+						displayOnlyTraceBlock: finalized.displayOnlyTraceBlock,
+					});
+				},
 				sdkEventDebug: this.sdkEventDebug,
 			}));
-			const { send } = sendResult;
-
-			if (prepared.runtime.kind === "live") {
-				const livePrepared = requireLocalLivePreparedTurn(prepared);
-				liveCompletion = runFinalizer.startLiveRunCompletion({
-					send,
-					prepared: livePrepared,
-					modelId: model.id,
-					discardIncompleteTools: (outcome) => discardIncompleteToolsFromPrepared(livePrepared, outcome),
-				});
-				await emitCursorLiveTurn({
-					params: this.params,
-					prepared: livePrepared,
-					sdkEventDebug: this.sdkEventDebug,
-					discardIncompleteTools: (outcome) => discardIncompleteToolsFromPrepared(livePrepared, outcome),
-				});
-				return;
-			}
-
-			const outcomePromise = awaitFinalizeCursorRunOutcome({
-				run: send.run,
-				prepared,
-				cursorAgentMessageOffset: send.cursorAgentMessageOffset,
-				modelId: model.id,
-				signal: options?.signal,
-				runResultFallback: send.run.result,
-				runErrorFallback: send.run.error,
-				resolvedApiKey: this.resolvedApiKey,
-				optionsApiKey: options?.apiKey,
-				sdkEventDebug: this.sdkEventDebug,
-				contextWindowAgentId: prepared.contextWindowAgentId,
-			});
-			prepared.lifecycle.trackRunCompletion(outcomePromise);
-			const finalized = await outcomePromise;
-			await runFinalizer.applyTerminalEvent({
-				kind: "direct",
-				prepared,
-				outcome: finalized.outcome,
-				displayOnlyTraceBlock: finalized.displayOnlyTraceBlock,
-			});
 		} catch (error) {
 			await runFinalizer.applyTerminalEvent({ kind: "error", prepared, error });
 		} finally {

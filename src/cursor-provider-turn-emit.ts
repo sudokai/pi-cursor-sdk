@@ -13,6 +13,7 @@ import type {
 	CursorProviderTurnPrepareResult,
 	CursorProviderTurnRunnerParams,
 } from "./cursor-provider-turn-types.js";
+import { isStaleAuthRetryEligibleLease } from "./cursor-provider-stale-auth-retry.js";
 import type { CursorSdkEventDebugSink } from "./cursor-sdk-event-debug.js";
 
 export interface EmitCursorLiveTurnParams {
@@ -37,6 +38,7 @@ export async function emitCursorLiveTurn(emitParams: EmitCursorLiveTurnParams): 
 				mode: "emit",
 				signal: options?.signal,
 				debugRecorder: sdkEventDebug,
+				retryStaleAuth: isStaleAuthRetryEligibleLease(prepared),
 			});
 		});
 	} catch (caught) {

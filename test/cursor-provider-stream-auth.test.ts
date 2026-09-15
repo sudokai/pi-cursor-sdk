@@ -401,7 +401,62 @@ describe("streamCursor auth and abort", () => {
 		expect(secondSend).toHaveBeenCalledTimes(1);
 	});
 
-	it("labels unauthenticated ConnectError from run.wait as an auth failure", async () => {
+	it("recreates a reused pooled local agent once when run.wait fails as unauthenticated", async () => {
+		const firstWait = vi.fn().mockRejectedValueOnce(makeUnauthenticatedConnectError());
+		const firstSend = vi
+			.fn()
+			.mockResolvedValueOnce(
+				asMockCursorRun({
+					id: "run-1",
+					agentId: "agent-1",
+					status: "finished",
+					wait: vi.fn().mockResolvedValue({ id: "run-1", status: "finished", result: "ok" }),
+				}),
+			)
+			.mockResolvedValueOnce(
+				asMockCursorRun({
+					id: "run-wait-expired",
+					agentId: "agent-1",
+					status: "running",
+					wait: firstWait,
+				}),
+			);
+		const secondSend = vi.fn().mockResolvedValue(
+			asMockCursorRun({
+				id: "run-2",
+				agentId: "agent-2",
+				status: "finished",
+				wait: vi.fn().mockResolvedValue({ id: "run-2", status: "finished", result: "recovered" }),
+			}),
+		);
+		mockedCreate
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-1",
+					send: firstSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			)
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-2",
+					send: secondSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			);
+
+		await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+		const recovered = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+		expect(getDoneEvent(recovered).reason).toBe("stop");
+		expect(hasEventType(recovered, "error")).toBe(false);
+		expect(mockedCreate).toHaveBeenCalledTimes(2);
+		expect(firstSend).toHaveBeenCalledTimes(2);
+		expect(firstWait).toHaveBeenCalledTimes(1);
+		expect(secondSend).toHaveBeenCalledTimes(1);
+	});
+
+	it("surfaces auth guidance when a freshly created agent's run.wait is unauthenticated", async () => {
 		const mockSend = vi.fn().mockResolvedValue(
 			asMockCursorRun({
 				id: "run-auth-expired",

@@ -13,6 +13,7 @@ import {
 	cursorLiveRuns,
 	drainCursorLiveRunTurn,
 } from "../src/cursor-provider-live-run-drain.js";
+import { AUTH_CURSOR_SDK_ERROR_MESSAGE, CursorStaleLocalAuthRetryError } from "../src/cursor-provider-errors.js";
 import { __testUtils as cursorSdkProcessGuardTestUtils } from "../src/cursor-sdk-process-error-guard.js";
 
 function makeAgent(agentId = "agent-1"): SDKAgent {
@@ -173,6 +174,53 @@ describe("cursor live run coordinator", () => {
 		expect(outcome).toBe("stop");
 		expect(push.mock.calls.map(([event]) => event.type)).not.toContain("toolcall_start");
 		expect(push.mock.calls.some(([event]) => event.type === "done" && event.reason === "toolUse")).toBe(false);
+	});
+
+	it("surfaces unauthorized wait as a stream error when retryStaleAuth is unset", async () => {
+		const run = cursorLiveRuns.start({
+			id: "pre-send-auth-error",
+			agent: makeAgent(),
+			sessionAgentScopeKey: "pre-send-auth-error-scope",
+			promptInputTokens: 1,
+		});
+		cursorLiveRuns.markError(run, AUTH_CURSOR_SDK_ERROR_MESSAGE);
+		const stream = createAssistantMessageEventStream();
+		const push = vi.spyOn(stream, "push");
+
+		const outcome = await drainCursorLiveRunTurn(
+			stream,
+			makeAssistantMessage(""),
+			makeModel(),
+			makeContext(),
+			run,
+			0,
+			{ mode: "emit" },
+		);
+
+		expect(outcome).toBe("error");
+		expect(push.mock.calls.some(([event]) => event.type === "error")).toBe(true);
+	});
+
+	it("throws CursorStaleLocalAuthRetryError for unauthorized wait with retryStaleAuth and no output", async () => {
+		const run = cursorLiveRuns.start({
+			id: "emit-auth-retry",
+			agent: makeAgent(),
+			sessionAgentScopeKey: "emit-auth-retry-scope",
+			promptInputTokens: 1,
+		});
+		cursorLiveRuns.markError(run, AUTH_CURSOR_SDK_ERROR_MESSAGE);
+
+		await expect(
+			drainCursorLiveRunTurn(
+				createAssistantMessageEventStream(),
+				makeAssistantMessage(""),
+				makeModel(),
+				makeContext(),
+				run,
+				0,
+				{ mode: "emit", retryStaleAuth: true },
+			),
+		).rejects.toBeInstanceOf(CursorStaleLocalAuthRetryError);
 	});
 
 	it("indexes active runs per scope without letting an older release clear a newer run", async () => {
