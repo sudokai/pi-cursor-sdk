@@ -70,6 +70,11 @@ export interface PrepareCursorProviderTurnParams {
 	throwIfAborted: () => void;
 	/** Snapshot resolved once by the runner before draining; reused unchanged through prepare. */
 	resolvedConfig: CursorResolvedSdkConfig;
+	/**
+	 * Skip local `Agent.resume()` and create a new SDK agent. Used by stale-auth
+	 * retry so a persisted resume handle cannot reload an expired idle agent.
+	 */
+	forceCreate?: boolean;
 }
 
 interface PrepareCursorProviderTurnContext extends PrepareCursorProviderTurnParams {
@@ -284,6 +289,7 @@ async function prepareCursorLocalProviderTurn(
 					queuedBridgeRequestsBeforeLiveRun.push(request);
 				}
 			},
+			forceCreate: prepareParams.forceCreate,
 			createAgent: (createOptions: Parameters<typeof Agent.create>[0]) =>
 				suppressCursorSdkOutput(() => Agent.create(createOptions)),
 		};

@@ -17,10 +17,12 @@ vi.mock("../src/cursor-provider-live-run-drain.js", () => ({
 	},
 }));
 
-function makeLocalPreparedTurn(
-	created: boolean,
-	liveRun?: CursorLiveRun,
-): LocalCursorProviderTurnPrepareResult {
+function makeLocalPreparedTurn(options: {
+	created: boolean;
+	resumed?: boolean;
+	liveRun?: CursorLiveRun;
+}): LocalCursorProviderTurnPrepareResult {
+	const { created, resumed = false, liveRun } = options;
 	const abandon = vi.fn().mockResolvedValue(undefined);
 	const restoreCursorSdkOutputFilter = vi.fn();
 	const turnCoordinator = {} as LocalCursorProviderTurnPrepareResult["runtime"]["turnCoordinator"];
@@ -53,6 +55,7 @@ function makeLocalPreparedTurn(
 			storeIdentity: { version: 1, stateRoot: "/tmp/store" },
 			sendState: { bootstrapped: true, contextFingerprint: "fp", incrementalSendCount: 1 },
 			created,
+			resumed,
 			commitSend: () => {},
 			trackRunCompletion: () => {},
 		} satisfies SessionCursorAgentLease,
@@ -76,13 +79,13 @@ function makeSendResult(): CursorProviderTurnSendResult {
 	} as CursorProviderTurnSendResult;
 }
 
-describe("stale pooled Cursor auth retry", () => {
+describe("stale local Cursor auth retry", () => {
 	it.each([
 		["unauthenticated ConnectError", () => makeUnauthenticatedConnectError()],
 		["AuthenticationError", () => new AuthenticationError("expired token")],
 	])("recreates a reused pooled agent after %s on send", async (_name, makeError) => {
-		const reused = makeLocalPreparedTurn(false);
-		const recreated = makeLocalPreparedTurn(true);
+		const reused = makeLocalPreparedTurn({ created: false });
+		const recreated = makeLocalPreparedTurn({ created: true });
 		const sendResult = makeSendResult();
 		const prepareTurn = vi.fn().mockResolvedValueOnce(reused).mockResolvedValueOnce(recreated);
 		const sendTurn = vi.fn().mockRejectedValueOnce(makeError()).mockResolvedValueOnce(sendResult);
@@ -92,13 +95,14 @@ describe("stale pooled Cursor auth retry", () => {
 		expect(result.prepared).toBe(recreated);
 		expect(result.sendResult).toBe(sendResult);
 		expect(prepareTurn).toHaveBeenCalledTimes(2);
+		expect(prepareTurn).toHaveBeenNthCalledWith(2, { forceCreate: true });
 		expect(sendTurn).toHaveBeenCalledTimes(2);
 		expect(reused.lifecycle.abandon).toHaveBeenCalledTimes(1);
 		expect(reused.restoreCursorSdkOutputFilter).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not recreate a freshly created agent on unauthenticated send", async () => {
-		const fresh = makeLocalPreparedTurn(true);
+		const fresh = makeLocalPreparedTurn({ created: true });
 		const error = makeUnauthenticatedConnectError();
 		const sendTurn = vi.fn().mockRejectedValue(error);
 
@@ -112,8 +116,23 @@ describe("stale pooled Cursor auth retry", () => {
 		expect(fresh.lifecycle.abandon).not.toHaveBeenCalled();
 	});
 
+	it("recreates a resumed local agent after unauthenticated send", async () => {
+		const resumed = makeLocalPreparedTurn({ created: true, resumed: true });
+		const recreated = makeLocalPreparedTurn({ created: true });
+		const sendResult = makeSendResult();
+		const prepareTurn = vi.fn().mockResolvedValueOnce(resumed).mockResolvedValueOnce(recreated);
+		const sendTurn = vi.fn().mockRejectedValueOnce(makeUnauthenticatedConnectError()).mockResolvedValueOnce(sendResult);
+
+		const result = await prepareAndSendCursorTurnRetryingStaleAuth({ prepareTurn, sendTurn });
+
+		expect(result.prepared).toBe(recreated);
+		expect(result.sendResult).toBe(sendResult);
+		expect(prepareTurn).toHaveBeenNthCalledWith(2, { forceCreate: true });
+		expect(resumed.lifecycle.abandon).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not retry a non-auth send failure on a reused pooled agent", async () => {
-		const reused = makeLocalPreparedTurn(false);
+		const reused = makeLocalPreparedTurn({ created: false });
 		const error = new Error("boom");
 		const sendTurn = vi.fn().mockRejectedValue(error);
 
@@ -129,8 +148,8 @@ describe("stale pooled Cursor auth retry", () => {
 
 	it("releases a prepare-started live run when retrying stale auth", async () => {
 		const liveRun = { disposed: false } as CursorLiveRun;
-		const reused = makeLocalPreparedTurn(false, liveRun);
-		const recreated = makeLocalPreparedTurn(true);
+		const reused = makeLocalPreparedTurn({ created: false, liveRun });
+		const recreated = makeLocalPreparedTurn({ created: true });
 		const sendResult = makeSendResult();
 		mockReleaseLiveRun.mockClear();
 

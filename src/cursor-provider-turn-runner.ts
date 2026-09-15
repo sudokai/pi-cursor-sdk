@@ -100,7 +100,7 @@ export class CursorProviderTurnRunner {
 			const resolvedApiKey = requireCursorApiKey(options);
 			this.resolvedApiKey = resolvedApiKey;
 			({ prepared, sendResult } = await prepareAndSendCursorTurnRetryingStaleAuth({
-				prepareTurn: async () => {
+				prepareTurn: async (retry) => {
 					// Assign before send so a throwing send still has a prepared turn for cleanup.
 					prepared = await prepareCursorProviderTurn({
 						params: this.params,
@@ -109,6 +109,7 @@ export class CursorProviderTurnRunner {
 						sdkEventDebug: this.sdkEventDebug,
 						throwIfAborted: () => this.throwIfAborted(),
 						resolvedConfig,
+						forceCreate: retry?.forceCreate,
 					});
 					return prepared;
 				},

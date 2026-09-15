@@ -11,7 +11,7 @@ This repository is a pi provider extension that registers Cursor SDK-backed mode
 - `shared/cursor-model-selection-identities.mjs` owns canonical selectable model/context/fast identities and context-window key normalization shared by runtime discovery and the snapshot generator; its `.d.mts` file owns the TypeScript contract.
 - `src/cursor-provider.ts` is a thin `streamCursor()` wrapper that delegates turn execution to the turn runner.
 - `src/cursor-provider-turn-runner.ts` orchestrates provider turns (pre-send drain, prepare, send, finalize, emit, cleanup).
-- `src/cursor-provider-stale-auth-retry.ts` owns same-turn recreate-and-retry when a reused pooled local agent fails `Agent.send()` as unauthenticated after idle (expired access token / stale transport).
+- `src/cursor-provider-stale-auth-retry.ts` owns same-turn recreate-and-retry when a reused pooled or resumed local agent fails `Agent.send()` as unauthenticated after idle (expired access token / stale transport). Retry prepare sets `forceCreate` so acquire uses `Agent.create` rather than `Agent.resume`.
 - `src/cursor-provider-turn-prepare.ts` owns turn prepare (auth, MCP timeout install, effective local HTTP transport configuration, session agent, live-run setup, coordinator).
 - `src/cursor-provider-turn-send.ts` owns SDK `agent.send()` wiring and abort listener registration.
 - `src/cursor-provider-turn-finalize.ts` owns unified `awaitFinalizeCursorRunOutcome()` (wait, transcript replay, incomplete tools, artifacts, context cache).

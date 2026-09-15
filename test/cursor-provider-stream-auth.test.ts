@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import {
 	resetCursorProviderTestState,
 	mockedCreate,
+	mockedResume,
 	mockedMessagesList,
 	makeModel,
 	makeContext,
@@ -21,7 +22,9 @@ import {
 import { makeUnauthenticatedConnectError } from "./helpers/cursor-unauthenticated-connect-error.js";
 import { CursorPiToolBridgeRunImpl } from "../src/cursor-pi-tool-bridge-run.js";
 import { __testUtils as cursorSdkProcessGuardTestUtils } from "../src/cursor-sdk-process-error-guard.js";
-import { streamCursor } from "../src/cursor-provider.js";
+import { streamCursor, __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
+import { __testUtils as cursorSessionResumeTestUtils } from "../src/cursor-session-agent-resume.js";
+import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 import { writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -238,6 +241,98 @@ describe("streamCursor auth and abort", () => {
 		expect(mockedCreate).toHaveBeenCalledTimes(2);
 		expect(firstSend).toHaveBeenCalledTimes(2);
 		expect(secondSend).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries unauthenticated send of a resumed local agent with Agent.create", async () => {
+		const cwd = process.cwd();
+		const sessionFile = join(tmpdir(), `stale-auth-resume-${Date.now()}.jsonl`);
+		writeFileSync(sessionFile, "");
+		cursorSessionScopeTestUtils.set(cwd, sessionFile, "session-stale-auth");
+		cursorSessionResumeTestUtils.set({
+			scopeKey: sessionFile,
+			sessionFile,
+			sessionId: "session-stale-auth",
+			cwd,
+			branchPathHash: cursorSessionResumeTestUtils.EMPTY_BRANCH_HASH,
+			compactionGeneration: 0,
+		});
+		const firstSend = vi
+			.fn()
+			.mockResolvedValueOnce(
+				asMockCursorRun({
+					id: "run-1",
+					agentId: "agent-1",
+					status: "finished",
+					wait: vi.fn().mockResolvedValue({ id: "run-1", status: "finished", result: "ok" }),
+				}),
+			)
+			.mockRejectedValueOnce(makeUnauthenticatedConnectError());
+		const secondSend = vi.fn().mockResolvedValue(
+			asMockCursorRun({
+				id: "run-2",
+				agentId: "agent-2",
+				status: "finished",
+				wait: vi.fn().mockResolvedValue({ id: "run-2", status: "finished", result: "recovered" }),
+			}),
+		);
+		mockedCreate
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-1",
+					send: firstSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			)
+			.mockResolvedValueOnce(
+				asMockSdkAgent({
+					agentId: "agent-2",
+					send: secondSend,
+					[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+				}),
+			);
+		mockedResume.mockResolvedValue(
+			asMockSdkAgent({
+				agentId: "agent-1",
+				send: firstSend,
+				[Symbol.asyncDispose]: vi.fn().mockResolvedValue(undefined),
+			}),
+		);
+
+		try {
+			await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+			await cursorProviderTestUtils.resetSessionCursorAgents();
+			const pending = cursorSessionResumeTestUtils.state.pendingHandle;
+			expect(pending?.agentId).toBe("agent-1");
+			if (!pending) throw new Error("expected local resume handle after first send");
+			const resumeState = cursorSessionResumeTestUtils.state;
+			resumeState.activeHandle = {
+				version: 2,
+				runtime: "local",
+				agentId: pending.agentId,
+				scopeKey: resumeState.scopeKey,
+				sessionFile: resumeState.sessionFile,
+				sessionId: resumeState.sessionId,
+				cwd: resumeState.cwd,
+				...(resumeState.repoRoot ? { repoRoot: resumeState.repoRoot } : {}),
+				poolKey: pending.poolKey,
+				branchPathHash: resumeState.branchPathHash,
+				compactionGeneration: resumeState.compactionGeneration,
+				sendState: { ...pending.sendState },
+				createdAt: "2026-01-01T00:00:00.000Z",
+				storeIdentity: { ...pending.storeIdentity },
+			};
+
+			const recovered = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+			expect(getDoneEvent(recovered).reason).toBe("stop");
+			expect(hasEventType(recovered, "error")).toBe(false);
+			expect(mockedResume).toHaveBeenCalledTimes(1);
+			expect(mockedCreate).toHaveBeenCalledTimes(2);
+			expect(firstSend).toHaveBeenCalledTimes(2);
+			expect(secondSend).toHaveBeenCalledTimes(1);
+		} finally {
+			rmSync(sessionFile, { force: true });
+		}
 	});
 
 	it("does not retry a non-auth send failure on a reused pooled local agent", async () => {

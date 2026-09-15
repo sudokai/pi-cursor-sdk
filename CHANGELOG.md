@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Recreate a reused pooled local Cursor SDK agent and retry `Agent.send()` once in the same turn when the SDK reports unauthenticated/expired auth after idle, instead of asking for `/login` while `auth.json` / `CURSOR_API_KEY` is still valid. A freshly created agent or a second unauthenticated failure still surfaces the existing auth guidance.
+- Recreate a reused pooled or resumed local Cursor SDK agent and retry `Agent.send()` once in the same turn when the SDK reports unauthenticated/expired auth after idle, using `Agent.create()` for that retry. A newly created non-resumed agent or a second unauthenticated failure still surfaces the existing auth guidance.
 - Load user-invoked `/skill:name` skills through `cursor_activate_skill` even when `disable-model-invocation` keeps them out of the Cursor catalog, instead of returning `Skill not available`.
 - Point local Cursor agents at the bundled platform-package tree-sitter `vendor/` directory (`CURSOR_TREE_SITTER_VENDOR_DIR`) and suppress the SDK `shell-parser: tree-sitter natives are unavailable` warning so it does not leak into pi's TUI.
 
