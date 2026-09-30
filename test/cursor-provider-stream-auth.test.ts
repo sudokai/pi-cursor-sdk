@@ -29,6 +29,9 @@ import { writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+const emitProcessEvent = (event: string | symbol, ...args: unknown[]): boolean =>
+	(process.emit as (event: string | symbol, ...args: unknown[]) => boolean).call(process, event, ...args);
+
 describe("streamCursor auth and abort", () => {
 	beforeEach(resetCursorProviderTestState);
 
@@ -490,7 +493,7 @@ describe("streamCursor auth and abort", () => {
 				agentId: "agent-1",
 				status: "running",
 				wait: vi.fn().mockImplementation(async () => {
-					process.emit("uncaughtException", connectError, "uncaughtException");
+					emitProcessEvent("uncaughtException", connectError, "uncaughtException");
 					throw connectError;
 				}),
 			}),

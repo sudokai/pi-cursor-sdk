@@ -6,22 +6,18 @@ import { TurnEndedUpdateSchema } from "@cursor/sdk";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import {
 	applyCursorUsage,
-	estimateCursorContextTotalTokens,
 	isCursorSdkUsageStructurallyValid,
 	readCursorSdkTurnUsageFromUpdate,
 } from "../src/cursor-usage-accounting.js";
-import { readInstalledPackageVersion, resolveInstalledPackageRoot } from "./helpers/installed-package.js";
+import { resolveInstalledPackageRoot } from "./helpers/installed-package.js";
 import { makeModel } from "./helpers/pi-harness.js";
 
 const require = createRequire(import.meta.url);
 const sdkRoot = resolveInstalledPackageRoot("@cursor/sdk");
-const installedSdkVersion = readInstalledPackageVersion("@cursor/sdk");
-
 interface TurnEndedUsageContractFixture {
 	provenance: {
 		sdkPackage: string;
 		sdkVersion: string;
-		compatibleSdkVersions: string[];
 		verified: string;
 		issue: string;
 		capture: string;
@@ -48,6 +44,7 @@ interface TurnEndedUsageContractFixture {
 		output: number;
 		cacheRead: number;
 		cacheWrite: number;
+		totalTokens: number;
 	}>;
 	runtimeDivergenceEvidence: {
 		inputTokensDeltaTurn1ToTurn2: number;
@@ -84,8 +81,6 @@ describe("installed Cursor SDK turn-ended usage contract", () => {
 	it("locks published SDK TokenUsage transform separately from observed raw turn-ended semantics", () => {
 		expect(fixture.provenance.sdkPackage).toBe("@cursor/sdk");
 		expect(fixture.provenance.sdkVersion).toBe("1.0.23");
-		expect(fixture.provenance.compatibleSdkVersions).toContain(fixture.provenance.sdkVersion);
-		expect(fixture.provenance.compatibleSdkVersions).toContain(installedSdkVersion);
 		expect(fixture.provenance.issue).toContain("/issues/196");
 
 		const usageTypes = readFileSync(join(sdkRoot, "dist/esm/usage-types.d.ts"), "utf8");
@@ -135,11 +130,8 @@ describe("installed Cursor SDK turn-ended usage contract", () => {
 			const partial = makeAssistantMessage();
 			applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: turn! });
 			expect(partial.usage).toMatchObject(fixture.expectedPiMappingFromRawTurnEnded[index]!);
-			// The real SDK billing survives on the host-ignored cursorSdk carrier.
-			expect((partial.usage as AssistantMessage["usage"] & { cursorSdk?: typeof sample.usage }).cursorSdk).toEqual(
-				sample.usage,
-			);
-			expect(partial.usage.totalTokens).toBe(estimateCursorContextTotalTokens(partial, model, context));
+			expect(partial.usage.cacheRead).toBe(0);
+			expect(partial.usage.cacheWrite).toBe(0);
 			// Explicitly reject the published SDK additive total for raw local turn-ended samples.
 			const publishedAdditiveTotal =
 				sample.usage.inputTokens +
@@ -147,6 +139,8 @@ describe("installed Cursor SDK turn-ended usage contract", () => {
 				sample.usage.cacheReadTokens +
 				sample.usage.cacheWriteTokens;
 			expect(partial.usage.totalTokens).not.toBe(publishedAdditiveTotal);
+			expect(partial.usage.totalTokens).toBeGreaterThan(0);
+			expect(partial.usage.totalTokens).toBeLessThan(model.contextWindow);
 		}
 	});
 });

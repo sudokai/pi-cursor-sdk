@@ -8,6 +8,7 @@
 
 import { writeFileSync, mkdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { matchesWrappedLineAt } from "./wrapped-line-match.mjs";
 
 const CARD_PATTERNS = [
@@ -35,10 +36,7 @@ const CARD_PATTERNS = [
 ];
 
 function cleanLine(line) {
-	return line
-		.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
-		.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, "")
-		.replace(/\r/g, "");
+	return stripVTControlCharacters(line).replace(/\r/g, "");
 }
 
 function matchesCardAt(lines, index, card) {

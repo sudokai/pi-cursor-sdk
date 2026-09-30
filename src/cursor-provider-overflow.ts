@@ -21,7 +21,7 @@ export const CURSOR_OVERFLOW_MARKER = "context_length_exceeded";
  * Context-overflow phrases. These overlap pi's own `OVERFLOW_PATTERNS` so the
  * false-positive surface matches pi's built-in detection for other providers.
  *
- * ponytail: intentionally narrow and textual. We do NOT match bare gRPC
+ * Matching is intentionally narrow and textual. We do not match bare gRPC
  * `resource_exhausted` (code 8) or `too many tokens` because pi documents those
  * can false-match throttling/quota errors and trigger an unwanted compaction.
  * If a live Cursor probe reveals a distinct overflow phrase, add it here; this

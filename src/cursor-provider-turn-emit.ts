@@ -1,4 +1,5 @@
 import { CursorLiveRunAbortError } from "./cursor-live-run-coordinator.js";
+import { CursorPartialContentEmitter } from "./cursor-partial-content-emitter.js";
 import {
 	cursorLiveRuns,
 	drainCursorLiveRunTurn,
@@ -29,6 +30,9 @@ export async function emitCursorLiveTurn(emitParams: EmitCursorLiveTurnParams): 
 	const { liveRun, turnCoordinator } = prepared.runtime;
 
 	const { options, model } = params;
+	// Drain and abort recovery write to the same partial. Keep its open text block
+	// and deferred message boundary together; a new Pi turn still gets a new emitter.
+	const emitter = new CursorPartialContentEmitter(params.stream, params.partial, -1, true);
 	try {
 		await cursorLiveRuns.withRunLease(liveRun, options?.signal, async () => {
 			await cursorLiveRuns.waitForProgress(liveRun, options?.signal);
@@ -36,6 +40,7 @@ export async function emitCursorLiveTurn(emitParams: EmitCursorLiveTurnParams): 
 			turnCoordinator.closeTraceBlock();
 			await drainCursorLiveRunTurn(params.stream, params.partial, model, params.context, liveRun, 0, {
 				mode: "emit",
+				emitter,
 				signal: options?.signal,
 				debugRecorder: sdkEventDebug,
 				retryStaleAuth: isStaleAuthRetryEligibleLease(prepared),
@@ -47,6 +52,7 @@ export async function emitCursorLiveTurn(emitParams: EmitCursorLiveTurnParams): 
 			turnCoordinator.closeTraceBlock();
 			flushPendingCursorLiveRunTraceEventsToStream(params.stream, params.partial, liveRun, {
 				includeTracesBehindQueuedTools: true,
+				emitter,
 			});
 		}
 		throw caught;

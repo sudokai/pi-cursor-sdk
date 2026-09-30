@@ -61,9 +61,8 @@ type LocalResumeCleanupSdkOperations = {
 
 class InvalidCursorSessionStoreIdentityError extends Error {}
 
-// ponytail: grows for the process lifetime, but its ceiling is the exact agent IDs this process
-// attempted to delete (never global) — it only fills the gap until this process exits; the durable
-// intent entry, not this Set, is the authority a restarted process relies on to block retries.
+// Tracks nondurable cleanup results for agent IDs this process attempted to delete.
+// After restart, durable intent entries block retries; this process-local set is empty.
 // Tests must call __testUtils.reset() between cases.
 const nondurableCleanupResultAgentIds = new Set<string>();
 let appendDurabilityForTests: ((data: CursorSessionAgentCleanupEntryData) => boolean) | undefined;

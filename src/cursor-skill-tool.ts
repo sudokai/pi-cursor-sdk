@@ -18,7 +18,7 @@ import { resolveEffectiveCursorConfigForContext } from "./cursor-runtime-state.j
 export const CURSOR_ACTIVATE_SKILL_TOOL_NAME = "cursor_activate_skill";
 export const CURSOR_ACTIVATE_SKILL_MCP_NAME = "pi__cursor_activate_skill";
 
-const AVAILABLE_SKILLS_SECTION_PATTERN = /\n\nThe following skills provide specialized instructions for specific tasks\.[\s\S]*?<\/available_skills>/;
+const AVAILABLE_SKILLS_SECTION_PATTERN = /<skills>\nThe following skills provide specialized instructions for specific tasks\.[\s\S]*?<\/available_skills>\n<\/skills>|\n\nThe following skills provide specialized instructions for specific tasks\.[\s\S]*?<\/available_skills>/;
 const MAX_SKILL_RESOURCES = 80;
 const RESOURCE_DIR_NAMES = ["scripts", "references", "assets"] as const;
 
@@ -72,14 +72,10 @@ function resolveEffectiveRuntimeForSkillLifecycle(
 }
 
 function shouldExposeSkillTool(model: ExtensionContext["model"], runtime: CursorRuntime): boolean {
-	// Expose the activation tool whenever Cursor can call it (local runtime,
-	// Cursor model, pi bridge enabled). The tool list must be stable from the
-	// first turn: pi assembles the turn's tool list before before_agent_start,
-	// where the skill list is first delivered, so the gate cannot wait for
-	// skills to load — a tool that flickers in mid-session drifts the system
-	// prompt and forces a full agent re-bootstrap, defeating prompt caching.
-	// execute() returns a clear "no skills available" error if the tool is
-	// invoked before skills load.
+	// Keep the tool surface stable before skills arrive at before_agent_start;
+	// Pi assembles the turn tools before that event. Changing the tool surface
+	// forces an agent rebootstrap. Calls for unloaded skills fail with
+	// "Skill not available" and list the current catalog.
 	return runtime === "local" && isCursorModel(model) && resolveCursorPiToolBridgeEnabled();
 }
 

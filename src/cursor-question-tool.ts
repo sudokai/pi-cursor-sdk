@@ -214,9 +214,8 @@ function emitCursorAskQuestionBlockedEvent(
 }
 
 export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): void {
-	// Opt-in: the tool is only registered when PI_CURSOR_ASK_QUESTION is enabled,
-	// so the default-off fork never registers, exposes, or manifests it. The
-	// per-model sync below still gates activation for the enabled case.
+	// Register only when PI_CURSOR_ASK_QUESTION is enabled. Model-scoped
+	// activation also requires the bridge and active pi tools.
 	if (!resolveCursorAskQuestionEnabled()) return;
 
 	pi.registerTool({

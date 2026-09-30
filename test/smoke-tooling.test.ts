@@ -273,6 +273,71 @@ try {
 		expect(invalidSuite.stderr).toContain("platform-build");
 	});
 
+	it("preserves captured OSC-8 read labels and content exactly as xterm renders them", () => {
+		const code = String.raw`
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { stripVTControlCharacters } from "node:util";
+import { detectCards, assertRequiredCards } from "./scripts/platform-smoke/card-detect.mjs";
+const { Terminal } = createRequire(import.meta.url)("@xterm/xterm");
+const captures = JSON.parse(readFileSync("test/fixtures/platform-read-hyperlinks.json", "utf8"));
+for (const { lane, ansi } of captures) {
+  const term = new Terminal({ cols: 150, rows: 45, allowProposedApi: true });
+  try {
+    const split = ansi.indexOf("\x1b\\") + 1;
+    await new Promise(resolve => term.write(ansi.slice(0, split), resolve));
+    await new Promise(resolve => term.write(ansi.slice(split), resolve));
+    const visible = term.buffer.active.getLine(0).translateToString(true);
+    // Independent terminal interpretation, not a second regular-expression stripper.
+    assert.equal(stripVTControlCharacters(ansi).trim(), visible.trim());
+    const required = lane === "native" ? ["read"] : ["read", "bridge-read-success"];
+    assert(assertRequiredCards(".", detectCards(visible), required).every(c => c.ok));
+    assert(assertRequiredCards(".", detectCards(ansi), required).every(c => c.ok));
+    // BEL and ST are both valid OSC terminators; neither may eat visible content.
+    assert.deepEqual(detectCards(ansi.replaceAll("\x1b\\", "\x07")), detectCards(ansi));
+  } finally { term.dispose(); }
+}
+const content = captures[0].ansi + '  "name": "pi-cursor-sdk"\r\n' + captures[1].ansi + 'ENOENT: no such file\r\n';
+const plain = stripVTControlCharacters(content);
+assert(plain.includes('"name": "pi-cursor-sdk"'));
+assert(assertRequiredCards(".", detectCards(content), ["read", "bridge-read-success", "bridge-read-failure"]).every(c => c.ok));
+assert.equal(detectCards('1. call pi__read on ./package.json\nread ./other.json\n').length, 0);
+console.log("captured-osc8-read-cards-ok");
+`;
+		const result = run(process.execPath, ["--input-type=module", "-e", code]);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("captured-osc8-read-cards-ok");
+	});
+
+	it("preserves captured OSC-8 read labels in HTML fallback", () => {
+		const code = String.raw`
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { renderHTML } from "./scripts/platform-smoke/render-ansi.mjs";
+import { detectCards } from "./scripts/platform-smoke/card-detect.mjs";
+const root = mkdtempSync(join(tmpdir(), "platform-osc8-capture-"));
+try {
+  const [{ ansi }] = JSON.parse(readFileSync("test/fixtures/platform-read-hyperlinks.json", "utf8"));
+  const rawPath = join(root, "terminal.ansi");
+  writeFileSync(rawPath, ansi);
+  const plain = stripVTControlCharacters(ansi);
+  assert(detectCards(plain).some(c => c.id === "read"));
+  const html = join(root, "terminal.html");
+  await renderHTML(rawPath, html);
+  const fallback = JSON.parse(readFileSync(html, "utf8").match(/const fallbackText = (.*);/)[1]);
+  assert.equal(fallback, plain);
+  console.log("osc8-html-fallback-ok");
+} finally { rmSync(root, { recursive: true, force: true }); }
+`;
+		const result = run(process.execPath, ["--input-type=module", "-e", code]);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout).toContain("osc8-html-fallback-ok");
+	});
+
 	it("keeps card and bundle evidence checks strict against prompt/path false positives", () => {
 		const code = String.raw`
 import { detectCards, assertRequiredCards } from "./scripts/platform-smoke/card-detect.mjs";

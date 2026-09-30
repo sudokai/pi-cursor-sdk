@@ -18,6 +18,8 @@ Required behavior:
 - fail when a card/evidence item has the wrong success/error state;
 - fail when footer/status is missing or unreadable.
 
+The plain-text card inventory uses Node's `stripVTControlCharacters` on the complete captured ANSI stream. OSC-8 hyperlinks may use either BEL or ST (ESC followed by a backslash) terminators, and a PTY chunk may split either sequence. Do not strip chunks independently or use a greedy OSC regex: that can consume the visible `package.json` label, successful read content, or subsequent cards even when xterm renders them correctly. Raw ANSI remains unchanged for independent xterm/PNG rendering and secret scanning; exact card patterns and JSONL success/error assertions still apply. `test/fixtures/platform-read-hyperlinks.json` retains minimal native/bridge headers from real captures with only the local hyperlink target anonymized.
+
 Meaningful gap closed: earlier card assertions could pass when the prompt mentioned `pi__read` or a missing-file path even if the actual tool card/result never rendered. The gate now requires JSONL result evidence and per-evidence rendered screenshots for native read, native shell success/failure, native edit diffs, bridge read success/failure, and bridge shell success.
 
 ## Registry visual classification
