@@ -1,6 +1,6 @@
 import { cursorLiveRuns } from "./cursor-provider-live-run-drain.js";
 import {
-	AUTH_CURSOR_SDK_ERROR_MESSAGE,
+	isCursorSdkAuthenticationFailureMessage,
 	CursorStaleLocalAuthRetryError,
 	isCursorSdkUnauthenticatedFailure,
 } from "./cursor-provider-errors.js";
@@ -41,7 +41,7 @@ export function shouldRetryStaleLocalCursorAuthWaitOutcome(
 ): boolean {
 	if (!isStaleAuthRetryEligibleLease(prepared) || outcome.kind !== "error") return false;
 	if (prepared.textDeltas.some((delta) => delta.trim().length > 0)) return false;
-	return outcome.errorMessage === AUTH_CURSOR_SDK_ERROR_MESSAGE;
+	return isCursorSdkAuthenticationFailureMessage(outcome.errorMessage);
 }
 
 /**

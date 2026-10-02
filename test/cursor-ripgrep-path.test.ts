@@ -118,6 +118,10 @@ describe("Cursor tree-sitter vendor dir", () => {
 			const nestedVendorTreeSitter = join(nestedPlatformDir, "vendor", "tree-sitter");
 			mkdirSync(nestedVendorTreeSitter, { recursive: true });
 			writeFileSync(join(nestedVendorTreeSitter, "index.js"), "module.exports = {};\n");
+			expect(resolveBundledCursorTreeSitterVendorDir(pathToFileURL(consumerModule))).toBeUndefined();
+			const nestedVendorBash = join(nestedPlatformDir, "vendor", "tree-sitter-bash");
+			mkdirSync(nestedVendorBash);
+			writeFileSync(join(nestedVendorBash, "index.js"), "module.exports = {};\n");
 
 			expect(resolveBundledCursorTreeSitterVendorDir(pathToFileURL(consumerModule))).toBe(
 				realpathSync(join(nestedPlatformDir, "vendor")),

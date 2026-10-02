@@ -4,9 +4,18 @@
 
 ### Fixed
 
-- Recreate a reused pooled or resumed local Cursor SDK agent and retry the turn once when the SDK reports unauthenticated/expired auth after idle, using `Agent.create()`. Retry covers both `Agent.send()` failure and `run.wait()` failure with no user-visible output. A newly created non-resumed agent or a second unauthenticated failure still surfaces the existing auth guidance.
+- Recreate a reused pooled or resumed local Cursor SDK agent and retry the turn once when the SDK reports unauthenticated/expired auth after idle, using `Agent.create()`. Retry covers both `Agent.send()` failure and `run.wait()` failure with no user-visible output. A newly created non-resumed agent or a second unauthenticated failure surfaces scrubbed authentication detail; explicit API-key rejection retains setup guidance.
 - Load user-invoked `/skill:name` skills through `cursor_activate_skill` even when `disable-model-invocation` keeps them out of the Cursor catalog, instead of returning `Skill not available`.
-- Point local Cursor agents at the bundled platform-package tree-sitter `vendor/` directory (`CURSOR_TREE_SITTER_VENDOR_DIR`) and suppress the SDK `shell-parser: tree-sitter natives are unavailable` warning so it does not leak into pi's TUI.
+- Restore native replay wrapper ownership after `/new`, `/resume`, reloads, and session switches without replacing third-party tools (#203).
+- Apply configured `models.json` cost rates to mapped token usage with Pi's native pricing helper; default rates and Cursor billed amounts are unchanged (#230, #231; thanks @TianZuo555).
+- Resolve the installed Cursor SDK native parser package before SDK initialization, preserving absolute `CURSOR_TREE_SITTER_VENDOR_DIR` overrides (#232).
+- Improve diagnostics with bounded, scrubbed structured errors and causes without diagnosing loader or ambiguous session-authentication failures as invalid API keys. Compiled/embedded-host failures remain unresolved; eligible stale local sessions retry once with a fresh agent.
+- Bound bridge tool-call IDs while preserving unique calls and matching results (#237; thanks @gwatkins-arista).
+- Keep skill activation callable with its catalog/descriptions intact and a stable system prompt (#244).
+- Map SDK `reasoning_effort` controls to Pi thinking without changing SDK defaults.
+- Stop post-compaction occupancy floors from reusing retained pre-compaction measurements, including after Pi converts the summary to a user message. Use the compaction timestamp rather than comparing token totals, so genuine new context can grow past the old `tokensBefore` value without being discarded.
+- Suppress the SDK missing tree-sitter natives warning so it does not leak into pi's TUI.
+
 ## 0.4.0 - 2026-09-26
 
 ### Breaking Changes

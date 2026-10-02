@@ -224,17 +224,12 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 		label: "Cursor skill",
 		description:
 			"Load full pi Agent Skill instructions for Cursor. Use with a skill name from the current <available_skills> catalog, or a skill the user invoked with /skill:name, before applying that skill.",
-		promptSnippet: "Load full pi Agent Skill instructions for a listed or user-invoked skill before Cursor applies that skill",
 		parameters: Type.Object({
 			name: Type.String({
 				description:
 					"Skill name from the current <available_skills> catalog, or a user-invoked /skill:name even when that skill is omitted from the catalog",
 			}),
 		}),
-		promptGuidelines: [
-			`Use ${CURSOR_ACTIVATE_SKILL_TOOL_NAME} for names in the current <available_skills> catalog, or a user-invoked /skill:name even if that name is omitted from the catalog.`,
-			"After loading a skill, follow its instructions and resolve relative skill paths against the returned skill directory.",
-		],
 		async execute(_toolCallId, params) {
 			const requestedName = (params as CursorActivateSkillParams).name?.trim();
 			if (!requestedName) {

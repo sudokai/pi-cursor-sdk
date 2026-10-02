@@ -5,13 +5,6 @@ import { dirname, isAbsolute, join } from "node:path";
 const RIPGREP_ENV = "CURSOR_RIPGREP_PATH";
 const TREE_SITTER_VENDOR_ENV = "CURSOR_TREE_SITTER_VENDOR_DIR";
 
-function resolveCursorSdkPlatformPackageDirectory(fromModuleUrl: string | URL): string {
-	const require = createRequire(fromModuleUrl);
-	const platformPackage = `@cursor/sdk-${process.platform}-${process.arch}`;
-	const sdkEntry = require.resolve("@cursor/sdk");
-	return dirname(require.resolve(`${platformPackage}/package.json`, { paths: [dirname(sdkEntry)] }));
-}
-
 function ensureEnvAbsoluteOrBundled(envName: string, bundledPath: string | undefined): string | undefined {
 	const configuredPath = process.env[envName];
 	if (configuredPath && isAbsolute(configuredPath)) return configuredPath;
@@ -19,16 +12,29 @@ function ensureEnvAbsoluteOrBundled(envName: string, bundledPath: string | undef
 	return bundledPath;
 }
 
-/** Bundled `@cursor/sdk-<platform>-<arch>/bin/rg` (or `rg.exe` on Windows). */
-export function resolveBundledCursorRipgrepPath(
+/** Resolve the native platform package relative to the installed SDK, not the host launcher. */
+export function resolveCursorSdkPlatformPackageDirectory(
 	fromModuleUrl: string | URL = import.meta.url,
 ): string | undefined {
 	try {
-		const ripgrepPath = join(
-			resolveCursorSdkPlatformPackageDirectory(fromModuleUrl),
-			"bin",
-			process.platform === "win32" ? "rg.exe" : "rg",
-		);
+		const require = createRequire(fromModuleUrl);
+		const sdkEntry = require.resolve("@cursor/sdk");
+		return dirname(require.resolve(`@cursor/sdk-${process.platform}-${process.arch}/package.json`, {
+			paths: [dirname(sdkEntry)],
+		}));
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolve bundled ripgrep only when the platform executable is accessible. */
+export function resolveBundledCursorRipgrepPath(
+	fromModuleUrl: string | URL = import.meta.url,
+): string | undefined {
+	const packageDirectory = resolveCursorSdkPlatformPackageDirectory(fromModuleUrl);
+	if (!packageDirectory) return undefined;
+	try {
+		const ripgrepPath = join(packageDirectory, "bin", process.platform === "win32" ? "rg.exe" : "rg");
 		accessSync(ripgrepPath, constants.X_OK);
 		return ripgrepPath;
 	} catch {
@@ -41,16 +47,19 @@ export function ensureCursorRipgrepPath(): string | undefined {
 }
 
 /**
- * Bundled platform-package `vendor/` directory that contains `tree-sitter/index.js`.
+ * Bundled platform-package `vendor/` directory containing both tree-sitter parser entrypoints.
  * `@cursor/sdk` loads this from `CURSOR_TREE_SITTER_VENDOR_DIR` and does not search
  * the process cwd for those natives.
  */
 export function resolveBundledCursorTreeSitterVendorDir(
 	fromModuleUrl: string | URL = import.meta.url,
 ): string | undefined {
+	const packageDirectory = resolveCursorSdkPlatformPackageDirectory(fromModuleUrl);
+	if (!packageDirectory) return undefined;
 	try {
-		const vendorDir = join(resolveCursorSdkPlatformPackageDirectory(fromModuleUrl), "vendor");
+		const vendorDir = join(packageDirectory, "vendor");
 		accessSync(join(vendorDir, "tree-sitter", "index.js"), constants.R_OK);
+		accessSync(join(vendorDir, "tree-sitter-bash", "index.js"), constants.R_OK);
 		return vendorDir;
 	} catch {
 		return undefined;

@@ -20,6 +20,7 @@ import {
 	asMockCursorRun,
 } from "./helpers/cursor-provider-harness.js";
 import { makeUnauthenticatedConnectError } from "./helpers/cursor-unauthenticated-connect-error.js";
+import { __testUtils as nativeToolDisplayTestUtils } from "../src/cursor-native-tool-display-state.js";
 import { CursorPiToolBridgeRunImpl } from "../src/cursor-pi-tool-bridge-run.js";
 import { __testUtils as cursorSdkProcessGuardTestUtils } from "../src/cursor-sdk-process-error-guard.js";
 import { streamCursor, __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
@@ -142,7 +143,7 @@ describe("streamCursor auth and abort", () => {
 		},
 	);
 
-	it("turns generic Cursor SDK failures into actionable setup errors", async () => {
+	it("reports generic Cursor SDK failures without inventing an auth diagnosis", async () => {
 		mockedCreate.mockRejectedValueOnce(new Error("Error"));
 
 		const stream = streamCursor(makeModel(), makeContext(), { apiKey: "test-key" });
@@ -150,14 +151,26 @@ describe("streamCursor auth and abort", () => {
 
 		const error = getErrorEvent(events);
 		expect(error.error.errorMessage).toContain("Cursor SDK request failed");
-		expect(error.error.errorMessage).toContain("/login");
-		expect(error.error.errorMessage).toContain("CURSOR_API_KEY");
-		expect(error.error.errorMessage).toContain("--api-key");
+		expect(error.error.errorMessage).not.toMatch(/API key|\/login/);
 		expect(error.error.errorMessage).not.toBe("Error");
 	});
 
-	it("labels likely auth failures without leaking the supplied API key", async () => {
-		mockedCreate.mockRejectedValueOnce(new Error("Unauthorized Bearer super-secret-key-12345"));
+	it("preserves structured loader failures through the provider stream", async () => {
+		mockedCreate.mockRejectedValueOnce({
+			name: "ResolveMessage", code: "ERR_MODULE_NOT_FOUND",
+			message: "Cannot find module '@cursor/sdk'",
+			cause: { name: "SyntaxError", message: "Missing protoBase64 export Bearer super-secret-key-12345" },
+		});
+		const events = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "super-secret-key-12345" }));
+		const message = getErrorEvent(events).error.errorMessage;
+		expect(message).toContain("ResolveMessage");
+		expect(message).toContain("ERR_MODULE_NOT_FOUND");
+		expect(message).toContain("protoBase64");
+		expect(message).not.toMatch(/API key|\/login|super-secret-key-12345/);
+	});
+
+	it("labels explicit rejected-key failures without leaking the supplied API key", async () => {
+		mockedCreate.mockRejectedValueOnce(new Error("Invalid API key Bearer super-secret-key-12345"));
 
 		const stream = streamCursor(makeModel(), makeContext(), { apiKey: "super-secret-key-12345" });
 		const events = await collectEvents(stream);
@@ -195,7 +208,9 @@ describe("streamCursor auth and abort", () => {
 
 		const events = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
 
-		expect(getErrorEvent(events).error.errorMessage).toContain("invalid or unauthorized");
+		expect(getErrorEvent(events).error.errorMessage).toContain("Cursor SDK authentication failed");
+		expect(getErrorEvent(events).error.errorMessage).toContain("code: 16");
+		expect(getErrorEvent(events).error.errorMessage).not.toMatch(/API key|\/login/);
 		expect(mockedCreate).toHaveBeenCalledTimes(1);
 		expect(mockSend).toHaveBeenCalledTimes(1);
 	});
@@ -366,7 +381,7 @@ describe("streamCursor auth and abort", () => {
 		expect(firstSend).toHaveBeenCalledTimes(2);
 	});
 
-	it("surfaces auth guidance when pooled-agent unauthenticated retry also fails", async () => {
+	it("preserves authentication detail when pooled-agent unauthenticated retry also fails", async () => {
 		const firstSend = vi
 			.fn()
 			.mockResolvedValueOnce(
@@ -398,14 +413,24 @@ describe("streamCursor auth and abort", () => {
 		await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
 		const failed = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
 
-		expect(getErrorEvent(failed).error.errorMessage).toContain("invalid or unauthorized");
+		expect(getErrorEvent(failed).error.errorMessage).toContain("Cursor SDK authentication failed");
+		expect(getErrorEvent(failed).error.errorMessage).toContain("code: 16");
+		expect(getErrorEvent(failed).error.errorMessage).not.toMatch(/API key|\/login/);
 		expect(mockedCreate).toHaveBeenCalledTimes(2);
 		expect(firstSend).toHaveBeenCalledTimes(2);
 		expect(secondSend).toHaveBeenCalledTimes(1);
 	});
 
-	it("recreates a reused pooled local agent once when run.wait fails as unauthenticated", async () => {
-		const firstWait = vi.fn().mockRejectedValueOnce(makeUnauthenticatedConnectError());
+	it.each([
+		{ mode: "direct", source: "connect" },
+		{ mode: "live", source: "connect" },
+		{ mode: "direct", source: "sdk" },
+		{ mode: "live", source: "sdk" },
+	])("recreates a reused pooled local agent once after $mode $source wait authentication failure", async ({ mode, source }) => {
+		if (mode === "live") nativeToolDisplayTestUtils.registerNativeToolNameForTests("cursor");
+		const firstWait = vi.fn().mockRejectedValueOnce(source === "sdk"
+			? new AuthenticationError("Not logged in")
+			: makeUnauthenticatedConnectError());
 		const firstSend = vi
 			.fn()
 			.mockResolvedValueOnce(
@@ -459,7 +484,31 @@ describe("streamCursor auth and abort", () => {
 		expect(secondSend).toHaveBeenCalledTimes(1);
 	});
 
-	it("surfaces auth guidance when a freshly created agent's run.wait is unauthenticated", async () => {
+	it("does not recreate a live agent after user-visible text precedes an unauthenticated wait", async () => {
+		nativeToolDisplayTestUtils.registerNativeToolNameForTests("cursor");
+		const send = vi.fn()
+			.mockResolvedValueOnce(asMockCursorRun({
+				id: "run-initial", agentId: "agent-visible-auth", status: "finished",
+				wait: vi.fn().mockResolvedValue({ id: "run-initial", status: "finished", result: "ok" }),
+			}))
+			.mockImplementationOnce(async (_message, options) => {
+				options.onDelta({ update: { type: "text-delta", text: "Visible progress" } });
+				return asMockCursorRun({
+					id: "run-visible-auth", agentId: "agent-visible-auth", status: "running",
+					wait: vi.fn().mockRejectedValue(makeUnauthenticatedConnectError()),
+				});
+			});
+		mockCreatedAgent({ agentId: "agent-visible-auth", send });
+		await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+		const events = await collectEvents(streamCursor(makeModel(), makeContext(), { apiKey: "test-key" }));
+
+		expect(events.some((event) => event.type === "text_delta" && event.delta === "Visible progress")).toBe(true);
+		expect(getErrorEvent(events).error.errorMessage).toContain("Cursor SDK authentication failed");
+		expect(mockedCreate).toHaveBeenCalledTimes(1);
+		expect(send).toHaveBeenCalledTimes(2);
+	});
+
+	it("preserves authentication detail when a freshly created agent's run.wait is unauthenticated", async () => {
 		const mockSend = vi.fn().mockResolvedValue(
 			asMockCursorRun({
 				id: "run-auth-expired",
@@ -475,9 +524,9 @@ describe("streamCursor auth and abort", () => {
 
 		const error = getErrorEvent(events);
 		expect(error.reason).toBe("error");
-		expect(error.error.errorMessage).toContain("invalid or unauthorized");
-		expect(error.error.errorMessage).toContain("/login");
-		expect(error.error.errorMessage).toContain("CURSOR_API_KEY");
+		expect(error.error.errorMessage).toContain("Cursor SDK authentication failed");
+		expect(error.error.errorMessage).toContain("code: 16");
+		expect(error.error.errorMessage).not.toMatch(/API key|\/login/);
 	});
 
 	it("suppresses duplicate process-level unauthenticated ConnectError during an active provider turn", async () => {
@@ -506,7 +555,7 @@ describe("streamCursor auth and abort", () => {
 
 			const errors = getEventsOfType(events, "error");
 			expect(errors).toHaveLength(1);
-			expect(errors[0].error.errorMessage).toContain("invalid or unauthorized");
+			expect(errors[0].error.errorMessage).toContain("Cursor SDK authentication failed");
 			expect(processListenerCalled).toBe(false);
 			expect(cursorSdkProcessGuardTestUtils.activeProviderTurnCount()).toBe(0);
 		} finally {

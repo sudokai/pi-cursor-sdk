@@ -25,7 +25,7 @@ import { CURSOR_TEXT_MESSAGE_SEPARATOR, CursorPartialContentEmitter } from "./cu
 import { emitDisplayOnlyTraceBlock } from "./cursor-display-only-trace.js";
 import { trimCurrentTurnAlreadyEmittedCursorText } from "./cursor-run-final-text.js";
 import {
-	AUTH_CURSOR_SDK_ERROR_MESSAGE,
+	isCursorSdkAuthenticationFailureMessage,
 	CursorStaleLocalAuthRetryError,
 	formatCursorSdkAbortMessage,
 	resolveCursorSdkAbortCause,
@@ -387,7 +387,7 @@ export async function drainCursorLiveRunTurn(
 			if (run.errorMessage) {
 				if (
 					options.retryStaleAuth &&
-					run.errorMessage === AUTH_CURSOR_SDK_ERROR_MESSAGE &&
+					isCursorSdkAuthenticationFailureMessage(run.errorMessage) &&
 					!cursorLiveRunHasUserVisibleProgress(run, turn)
 				) {
 					throw new CursorStaleLocalAuthRetryError();

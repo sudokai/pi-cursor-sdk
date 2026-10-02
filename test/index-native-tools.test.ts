@@ -39,6 +39,7 @@ import {
 	recordCursorNativeToolDisplay,
 } from "../src/cursor-native-tool-display-state.js";
 import { CURSOR_ACTIVATE_SKILL_TOOL_NAME } from "../src/cursor-skill-tool.js";
+import { CURSOR_ASK_QUESTION_TOOL_NAME } from "../src/cursor-question-tool.js";
 
 describe("extension native Cursor tool replay", () => {
 	beforeEach(resetIndexExtensionTestState);
@@ -55,6 +56,31 @@ describe("extension native Cursor tool replay", () => {
 
 		expect(pi._tools.map((tool) => tool.name)).toEqual([CURSOR_ACTIVATE_SKILL_TOOL_NAME]);
 		expect(canRenderCursorToolNatively("grep")).toBe(false);
+	});
+
+	it("keeps transcript fallback when a host cannot register a native wrapper", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
+		mockedDiscover.mockResolvedValueOnce([]);
+		const pi = createExtensionPi();
+		const registerTool = pi.registerTool.getMockImplementation();
+		if (!registerTool) throw new Error("Native registration harness has no tool implementation");
+		let readAttempts = 0;
+		pi.registerTool.mockImplementation((tool) => {
+			if (tool.name === "read") {
+				readAttempts += 1;
+				throw new TypeError("Host read tool factory is unavailable");
+			}
+			registerTool(tool);
+		});
+
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+		await pi.runSessionStart();
+
+		expect(canRenderCursorToolNatively("read")).toBe(false);
+		expect(canRenderCursorToolNatively("bash")).toBe(true);
+		expect(canRenderCursorToolNatively("cursor")).toBe(true);
+		expect(readAttempts).toBe(1);
 	});
 
 	it("registers native Cursor tool wrappers with the pi session cwd", async () => {
@@ -733,5 +759,57 @@ describe("extension native Cursor tool replay", () => {
 		expect(canRenderCursorToolNatively("find")).toBe(true);
 		expect(canRenderCursorToolNatively("cursor")).toBe(true);
 		expect(canRenderCursorToolNatively("ls")).toBe(true);
+	});
+
+	it("re-registers bash wrappers after the session registry falls back to builtins", async () => {
+		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";
+		mockedDiscover.mockResolvedValueOnce([]);
+		const dir = mkdtempSync(join(tmpdir(), "pi-cursor-replay-reregister-"));
+		const markerPath = join(dir, "marker.txt");
+		try {
+			writeFileSync(markerPath, "");
+			const pi = createExtensionPi();
+			await extensionFactory(pi);
+			await pi.runSessionStart({ cwd: dir });
+
+			const kept = pi._tools.filter(
+				(tool) => tool.name === CURSOR_ASK_QUESTION_TOOL_NAME || tool.name === CURSOR_ACTIVATE_SKILL_TOOL_NAME,
+			);
+			pi._tools.length = 0;
+			pi._tools.push(...kept);
+
+			await pi.runSessionStart({ cwd: dir });
+
+			const bashTool = getHarnessRegisteredTool(pi._tools, "bash");
+			await expect(
+				bashTool.execute(
+					"cursor-replay-2-1-tool-1",
+					{ command: `printf 'B\\n' >> marker.txt` },
+					undefined,
+					undefined,
+					createExtensionTestContext({ cwd: dir }),
+				),
+			).rejects.toThrow("replay-only call does not execute work");
+			expect(readFileSync(markerPath, "utf-8")).toBe("");
+
+			recordCursorNativeToolDisplay({
+				id: "cursor-replay-2-1-tool-2",
+				toolName: "bash",
+				args: { command: "printf recorded" },
+				result: { content: [{ type: "text", text: "recorded" }] },
+				isError: false,
+			});
+			const recorded = await bashTool.execute(
+				"cursor-replay-2-1-tool-2",
+				{ command: `printf 'B\\n' >> marker.txt` },
+				undefined,
+				undefined,
+				createExtensionTestContext({ cwd: dir }),
+			);
+			expect(recorded.content).toEqual([{ type: "text", text: "recorded" }]);
+			expect(readFileSync(markerPath, "utf-8")).toBe("");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
