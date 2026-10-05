@@ -15,7 +15,7 @@ import {
 	makeAssistantMessage,
 	makeHarnessModel,
 } from "./helpers/pi-harness.js";
-import { __testUtils as nativeToolDisplayTestUtils } from "../src/cursor-native-tool-display-state.js";
+import { registerCursorNativeToolDisplayState, __testUtils as nativeToolDisplayTestUtils } from "../src/cursor-native-tool-display-state.js";
 import {
 	CURSOR_PI_BRIDGE_TOOL_CALL_ID_MAX_LENGTH,
 	buildCursorPiBridgeToolCallId,
@@ -160,7 +160,8 @@ describe("cursor pi tool bridge flags and snapshots", () => {
 		const externalSnapshot = buildCursorPiToolBridgeSnapshot(pi);
 		expect(externalSnapshot.tools.map((tool) => tool.piToolName)).toEqual(["custom_read", "sem_reindex", "cursor"]);
 
-		nativeToolDisplayTestUtils.registerNativeToolNameForTests("cursor");
+		registerCursorNativeToolDisplayState(pi);
+		nativeToolDisplayTestUtils.registerNativeToolNameForTests("cursor", pi);
 		const snapshot = buildCursorPiToolBridgeSnapshot(pi);
 
 		expect(snapshot.tools.map((tool) => tool.piToolName)).toEqual(["custom_read", "sem_reindex"]);
@@ -433,6 +434,28 @@ describe("cursor pi tool bridge loopback MCP lifecycle", () => {
 		}
 	});
 
+	it("bounds adapter JSON bodies before parsing while preserving origin rejection", async () => {
+		const { createMcpHonoApp } = await import("@modelcontextprotocol/hono");
+		const app = createMcpHonoApp({ host: "127.0.0.1" });
+		const dispatch = vi.fn(() => new Response("unexpected dispatch"));
+		app.all("*", dispatch);
+		// Exercise the installed adapter's complete body reader directly: an eager socket upload
+		// can race its early rejection on Windows, obscuring the response with ECONNRESET.
+		const oversizedBody = "x".repeat(4 * 1024 * 1024 + 1);
+		const request = (origin?: string) => new Request("http://127.0.0.1/mcp", {
+			method: "POST",
+			headers: {
+				host: "127.0.0.1",
+				"content-type": "application/json",
+				...(origin ? { origin } : {}),
+			},
+			body: oversizedBody,
+		});
+		expect((await app.fetch(request())).status).toBe(413);
+		expect((await app.fetch(request("https://attacker.example"))).status).toBe(403);
+		expect(dispatch).not.toHaveBeenCalled();
+	});
+
 	it("shares and closes one loopback server for concurrent run creation", async () => {
 		const registry = __testUtils.createRegistry(
 			createBridgePiHarness({ active: ["read"], tools: [createToolInfo("read")] }),
@@ -474,11 +497,10 @@ describe("cursor pi tool bridge loopback MCP lifecycle", () => {
 		expect(disabledRun.mcpServers).toBeUndefined();
 		expect(disabledRegistry.getEndpointCount()).toBe(0);
 
-		nativeToolDisplayTestUtils.registerNativeToolNameForTests("cursor");
-		const emptyRegistry = __testUtils.createRegistry(
-			createBridgePiHarness({ active: ["cursor"], tools }),
-			{},
-		);
+		const pi = createBridgePiHarness({ active: ["cursor"], tools });
+		registerCursorNativeToolDisplayState(pi);
+		nativeToolDisplayTestUtils.registerNativeToolNameForTests("cursor", pi);
+		const emptyRegistry = __testUtils.createRegistry(pi, {});
 		const emptyRun = await emptyRegistry.createRun();
 		expect(emptyRun.enabled).toBe(false);
 		expect(emptyRun.snapshot.tools).toEqual([]);
@@ -904,6 +926,48 @@ describe("cursor pi tool bridge loopback MCP lifecycle", () => {
 			await client.close().catch(() => undefined);
 			await transport.close().catch(() => undefined);
 			await run.dispose();
+		}
+	});
+
+	it("keeps the parent's registry and active tool call alive across child bind and shutdown (#217)", async () => {
+		process.env.PI_CURSOR_EXPOSE_BUILTIN_TOOLS = "1";
+		const a = createBridgePiHarness({ active: ["bash"], tools: [createToolInfo("bash")] });
+		const bridgeA = registerCursorPiToolBridge(a);
+		const runA = await bridgeA.createRun();
+		const connectionA = await connectClient(getCursorPiBridgeMcpUrl(runA));
+		const abortA = vi.fn();
+		try {
+			const pendingA = connectionA.client.callTool({ name: "pi__bash", arguments: {} });
+			const [requestA] = await waitForQueuedRequests(runA);
+			await a.runToolCall({ type: "tool_call", toolCallId: requestA.piToolCallId, toolName: "bash", input: requestA.args }, { abort: abortA });
+			const b = createBridgePiHarness({ active: ["read"], tools: [createToolInfo("read")] });
+			const bridgeB = registerCursorPiToolBridge(b);
+			const runB = await bridgeB.createRun();
+			const connectionB = await connectClient(getCursorPiBridgeMcpUrl(runB));
+			try {
+				const pendingB = connectionB.client.callTool({ name: "pi__read", arguments: {} }).catch((error: unknown) => error);
+				const [requestB] = await waitForQueuedRequests(runB);
+				const abortB = vi.fn();
+				await b.runToolCall({ type: "tool_call", toolCallId: requestB.piToolCallId, toolName: "read", input: requestB.args }, { abort: abortB });
+				await b.runSessionShutdown({ reason: "quit" });
+				expect(await pendingB).toBeInstanceOf(Error);
+				expect(abortB).toHaveBeenCalledOnce();
+				expect(abortA).not.toHaveBeenCalled();
+				expect(__testUtils.getActiveBridgeToolExecutionAbortCount()).toBe(1);
+				const anotherRunA = await bridgeA.createRun();
+				expect(anotherRunA.snapshot.tools.map((tool) => tool.piToolName)).toEqual(["bash"]);
+				await anotherRunA.dispose();
+				await runA.resolveToolResults([{ role: "toolResult", toolCallId: requestA.piToolCallId, toolName: "bash", content: [{ type: "text", text: "parent result" }], isError: false, timestamp: 1 }]);
+				expect(await pendingA).toMatchObject({ content: [{ type: "text", text: "parent result" }] });
+				await a.runToolResult({ type: "tool_result", toolCallId: requestA.piToolCallId, toolName: "bash", input: {}, content: [], isError: false, details: undefined });
+			} finally {
+				await connectionB.client.close();
+				await connectionB.transport.close();
+			}
+		} finally {
+			await a.runSessionShutdown({ reason: "quit" });
+			await connectionA.client.close();
+			await connectionA.transport.close();
 		}
 	});
 

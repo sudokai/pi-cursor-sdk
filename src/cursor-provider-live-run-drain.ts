@@ -35,13 +35,20 @@ import { partitionNativeToolsByActiveContext } from "./cursor-native-replay-rout
 import type { CursorSdkEventDebugRecorder } from "./cursor-sdk-event-debug.js";
 
 export const DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS = 5 * 60 * 1000;
+export const CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV = "PI_CURSOR_LIVE_RUN_IDLE_DISPOSE_MS";
+
+export function parseCursorNativeReplayIdleDisposeMs(raw: string | undefined): number {
+	if (!raw || !/^[0-9]+$/.test(raw)) return DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS;
+	const value = Number(raw);
+	return value >= 1 && value <= 2147483647 ? value : DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS;
+}
 const CURSOR_NATIVE_REPLAY_TOOL_ID_PATTERN = /^(cursor-replay-\d+-\d+)-tool-\d+$/;
 
 interface CursorLiveTurnState {
 	emitter: CursorPartialContentEmitter;
 	emittedText: string;
 }
-let cursorNativeReplayIdleDisposeMs = DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS;
+let cursorNativeReplayIdleDisposeMsOverride: number | undefined;
 
 type CursorLiveRunDrainMode = "emit" | "chain_user_input";
 type CursorLiveRunDrainOutcome = "tool_use" | "stop" | "error" | "aborted" | "chain_user_input";
@@ -55,7 +62,7 @@ export async function abandonSessionCursorAgent(scopeKey: string | undefined): P
 }
 
 export const cursorLiveRuns = createCursorLiveRunCoordinator({
-	getIdleDisposeMs: () => cursorNativeReplayIdleDisposeMs,
+	getIdleDisposeMs: () => cursorNativeReplayIdleDisposeMsOverride ?? parseCursorNativeReplayIdleDisposeMs(process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV]),
 	deleteNativeToolDisplay: deleteCursorNativeToolDisplay,
 	abandonSessionAgent: (scopeKey) => abandonSessionCursorAgent(scopeKey),
 });
@@ -76,12 +83,12 @@ function cursorLiveRunHasUserVisibleProgress(run: CursorLiveRun, turn: CursorLiv
 	return false;
 }
 
-export function getPendingCursorLiveRun(context: Context): CursorLiveRun | undefined {
-	return cursorLiveRuns.getPendingFromContext(context, getCursorNativeReplayIdFromToolCallId);
+export function getPendingCursorLiveRun(context: Context, scopeKey: string): CursorLiveRun | undefined {
+	return cursorLiveRuns.getPendingFromContext(context, getCursorNativeReplayIdFromToolCallId, scopeKey);
 }
 
-export function getActiveCursorLiveRunForCurrentScope(): CursorLiveRun | undefined {
-	return cursorLiveRuns.getActiveForScope();
+export function getActiveCursorLiveRunForCurrentScope(scopeKey?: string): CursorLiveRun | undefined {
+	return cursorLiveRuns.getActiveForScope(scopeKey);
 }
 
 function splitTextIntoReplayDeltas(text: string): string[] {
@@ -188,6 +195,7 @@ function emitCursorNativeToolUseTurn(
 	run: CursorLiveRun,
 	toolResultInputTokens: number,
 	tools: CursorNativeToolDisplayItem[],
+	occupancyFloor: number | undefined,
 	debugRecorder?: CursorSdkEventDebugRecorder,
 ): void {
 	const shouldTerminate = run.done && !run.finalText?.trim() && !cursorLiveRuns.peekEvent(run);
@@ -205,7 +213,7 @@ function emitCursorNativeToolUseTurn(
 		stream.push({ type: "toolcall_delta", contentIndex, delta: serializedArgs, partial });
 		const block = partial.content[contentIndex];
 		if (block.type === "toolCall") stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial });
-		if (recordCursorNativeToolDisplay({ ...tool, terminate: shouldTerminate })) {
+		if (recordCursorNativeToolDisplay({ ...tool, terminate: shouldTerminate }, run.nativeDisplay)) {
 			run.recordedToolDisplayIds.push(tool.id);
 			debugRecorder?.recordDrainEvent("native_tool_display_recorded", {
 				toolId: tool.id,
@@ -217,6 +225,7 @@ function emitCursorNativeToolUseTurn(
 	applyCursorUsage(partial, model, context, cursorLiveRuns.takeTurnInputTokens(run, toolResultInputTokens), {
 		runtime: "local",
 		turn: cursorLiveRuns.takeSdkTurnUsage(run),
+		occupancyFloor,
 	});
 	partial.stopReason = "toolUse";
 	stream.push({ type: "done", reason: "toolUse", message: partial });
@@ -248,6 +257,7 @@ function emitCursorBridgeToolUseTurn(
 	run: CursorLiveRun,
 	toolResultInputTokens: number,
 	requests: CursorPiBridgeToolRequest[],
+	occupancyFloor: number | undefined,
 ): void {
 	for (const request of requests) {
 		const contentIndex = partial.content.length;
@@ -266,6 +276,7 @@ function emitCursorBridgeToolUseTurn(
 	applyCursorUsage(partial, model, context, cursorLiveRuns.takeTurnInputTokens(run, toolResultInputTokens), {
 		runtime: "local",
 		turn: cursorLiveRuns.takeSdkTurnUsage(run),
+		occupancyFloor,
 	});
 	partial.stopReason = "toolUse";
 	stream.push({ type: "done", reason: "toolUse", message: partial });
@@ -280,7 +291,7 @@ async function emitCursorLiveRunPendingToolUseTurn(
 	context: Context,
 	run: CursorLiveRun,
 	toolResultInputTokens: number,
-	options: { mode: CursorLiveRunDrainMode; signal?: AbortSignal; debugRecorder?: CursorSdkEventDebugRecorder },
+	options: { mode: CursorLiveRunDrainMode; signal?: AbortSignal; debugRecorder?: CursorSdkEventDebugRecorder; occupancyFloor?: number },
 ): Promise<"tool_use" | "handled" | undefined> {
 	const debugRecorder = options.debugRecorder ?? run.debugRecorder;
 	const eventType = cursorLiveRuns.peekEvent(run)?.type;
@@ -296,12 +307,12 @@ async function emitCursorLiveRunPendingToolUseTurn(
 			return "handled";
 		}
 		if (options.mode === "emit") turn.emitter.closeAll();
-		emitCursorNativeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, active, debugRecorder);
+		emitCursorNativeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, active, options.occupancyFloor, debugRecorder);
 	} else {
 		const requests = cursorLiveRuns.collectBridgeToolBatch(run);
 		if (requests.length === 0) return "handled";
 		if (options.mode === "emit") turn.emitter.closeAll();
-		emitCursorBridgeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, requests);
+		emitCursorBridgeToolUseTurn(stream, partial, model, context, run, toolResultInputTokens, requests, options.occupancyFloor);
 	}
 	return "tool_use";
 }
@@ -317,6 +328,7 @@ export async function drainCursorLiveRunTurn(
 		mode: CursorLiveRunDrainMode;
 		signal?: AbortSignal;
 		debugRecorder?: CursorSdkEventDebugRecorder;
+		occupancyFloor?: number;
 		emitter?: CursorPartialContentEmitter;
 		/** When true, unauthorized wait with no user-visible output throws for same-turn recreate. Pre-send drain leaves this unset. */
 		retryStaleAuth?: boolean;
@@ -414,7 +426,7 @@ export async function drainCursorLiveRunTurn(
 				applyCursorUsage(partial, model, context, cursorLiveRuns.takeTurnInputTokens(run, toolResultInputTokens), {
 					runtime: "local",
 					turn: cursorLiveRuns.takeSdkTurnUsage(run),
-					billed: run.billedTurnUsage,
+					occupancyFloor: options.occupancyFloor,
 				});
 				if (run.resumeNotice) {
 					emitDisplayOnlyTraceBlock(stream, partial, run.resumeNotice);
@@ -460,12 +472,14 @@ export async function drainExistingCursorLiveRunBeforeSend(
 	partial: AssistantMessage,
 	model: Model<Api>,
 	context: Context,
-	signal?: AbortSignal,
-	turnDebugRecorder?: CursorSdkEventDebugRecorder,
+	signal: AbortSignal | undefined,
+	turnDebugRecorder: CursorSdkEventDebugRecorder | undefined,
+	scopeKey: string,
+	occupancyFloor?: number,
 ): Promise<LiveRunPreSendOutcome> {
 	turnDebugRecorder?.recordDrainEvent("pre_send_start", {});
 	while (true) {
-		const run = getPendingCursorLiveRun(context) ?? getActiveCursorLiveRunForCurrentScope();
+		const run = getPendingCursorLiveRun(context, scopeKey) ?? getActiveCursorLiveRunForCurrentScope(scopeKey);
 		if (!run || run.disposed) {
 			turnDebugRecorder?.recordDrainEvent("pre_send_end", { outcome: "continue_send", reason: "no_pending_run" });
 			return "continue_send";
@@ -486,6 +500,7 @@ export async function drainExistingCursorLiveRunBeforeSend(
 					mode: shouldChainUserInput ? "chain_user_input" : "emit",
 					signal,
 					debugRecorder: turnDebugRecorder,
+					occupancyFloor,
 				});
 				const mapped = drainOutcome === "chain_user_input" ? "continue_send" : "stream_ended";
 				turnDebugRecorder?.recordDrainEvent("pre_send_iteration", {
@@ -514,11 +529,11 @@ export async function drainExistingCursorLiveRunBeforeSend(
 }
 
 export function setCursorNativeReplayIdleDisposeMs(value: number): void {
-	cursorNativeReplayIdleDisposeMs = value;
+	cursorNativeReplayIdleDisposeMsOverride = value;
 }
 
 export function resetCursorNativeReplayIdleDisposeMs(): void {
-	cursorNativeReplayIdleDisposeMs = DEFAULT_CURSOR_NATIVE_REPLAY_IDLE_DISPOSE_MS;
+	cursorNativeReplayIdleDisposeMsOverride = undefined;
 }
 
 export async function releaseAllPendingCursorLiveRunsForTests(): Promise<void> {

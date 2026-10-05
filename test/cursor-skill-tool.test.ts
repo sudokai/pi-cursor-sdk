@@ -113,7 +113,7 @@ describe("cursor_activate_skill explicit-only lookup", () => {
 				undefined,
 				createExtensionTestContext({ model, cwd: dir }),
 			),
-		).rejects.toThrow(/Catalog skills: global-skill/);
+		).rejects.toThrow(/Available skills: global-skill/);
 	});
 });
 

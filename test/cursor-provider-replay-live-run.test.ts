@@ -32,7 +32,8 @@ import {
 	asMockCursorRun,
 	getPiToolsMcpUrlFromAgentCreateOptions,
 	createExtensionTestContext} from "./helpers/cursor-provider-harness.js";
-import { streamCursor, __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
+import { streamCursor } from "./helpers/cursor-provider-ownership.js";
+import { __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
 import { __testUtils as sessionAgentTestUtils } from "../src/cursor-session-agent.js";
 import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 import { estimateCursorPromptMessageTokens } from "../src/context.js";
@@ -217,17 +218,12 @@ describe("streamCursor native replay live run", () => {
 		expect(firstDone.message.stopReason).toBe("toolUse");
 		expect(firstDone.message.content.map((block) => block.type)).toEqual(["text", "toolCall"]);
 		expect(firstDone.message.content[0]).toEqual({ type: "text", text: "I am checking files." });
-		// SDK inputTokens (25_432) = uncached input (1_309) + cacheRead (24_000) + cacheWrite (123);
-		// cache billing stays on cursorSdk so pi-ai silent-overflow stays inactive.
+		// Pi usage keeps the SDK's prompt partition in disjoint input/cache fields.
 		expect(firstDone.message.usage).toMatchObject({
 			input: 25_432 - 24_000 - 123,
 			output: 612,
-			cacheRead: 0,
-			cacheWrite: 0,
-		});
-		expect((firstDone.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 24_000,
-			cacheWriteTokens: 123,
+			cacheRead: 24_000,
+			cacheWrite: 123,
 		});
 		expect(firstDone.message.usage.totalTokens).toBeGreaterThan(0);
 		expect(firstDone.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
@@ -357,15 +353,10 @@ describe("streamCursor native replay live run", () => {
 		const secondDone = getDoneEvent(await secondEventsPromise);
 		const secondToolCall = secondDone.message.content.find(isToolCallBlock);
 		expect(secondDone.reason).toBe("toolUse");
-		// SDK inputTokens (40_000) = actual input (1_000) + cacheRead (39_000);
-		// cache billing stays on cursorSdk so pi-ai silent-overflow stays inactive.
+		// SDK inputTokens (40_000) = actual input (1_000) + cacheRead (39_000).
 		expect(secondDone.message.usage.input).toBe(1_000);
-		expect(secondDone.message.usage.cacheRead).toBe(0);
+		expect(secondDone.message.usage.cacheRead).toBe(39_000);
 		expect(secondDone.message.usage.cacheWrite).toBe(0);
-		expect((secondDone.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 39_000,
-			cacheWriteTokens: 0,
-		});
 
 		const secondToolResult = await readTool!.execute(secondToolCall!.id, secondToolCall!.arguments, undefined, undefined, createExtensionTestContext());
 		resolveRun({ id: "run-late", status: "finished", result: "Final answer." });
@@ -444,13 +435,9 @@ describe("streamCursor native replay live run", () => {
 
 		const secondDone = getDoneEvent(await secondEventsPromise);
 		const secondToolCall = secondDone.message.content.find(isToolCallBlock);
-		// SDK inputTokens (20_000) = actual input (10_000) + cacheRead (10_000);
-		// cache billing stays on cursorSdk so pi-ai silent-overflow stays inactive.
+		// SDK inputTokens (20_000) = actual input (10_000) + cacheRead (10_000).
 		expect(secondDone.message.usage.input).toBe(10_000);
-		expect(secondDone.message.usage.cacheRead).toBe(0);
-		expect((secondDone.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 10_000,
-		});
+		expect(secondDone.message.usage.cacheRead).toBe(10_000);
 		expect(secondDone.message.usage.output).toBe(200);
 		expect(secondDone.message.usage.totalTokens).toBeGreaterThan(0);
 		expect(secondDone.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
@@ -533,12 +520,8 @@ describe("streamCursor native replay live run", () => {
 		const done = getDoneEvent(events);
 
 		expect(done.reason).toBe("stop");
-		// SDK inputTokens (31_000) = actual input (1_000) + cacheRead (30_000);
-		// cache billing stays on cursorSdk so pi-ai silent-overflow stays inactive.
-		expect(done.message.usage).toMatchObject({ input: 1_000, output: 700, cacheRead: 0, cacheWrite: 0 });
-		expect((done.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 30_000,
-		});
+		// SDK inputTokens (31_000) = actual input (1_000) + cacheRead (30_000).
+		expect(done.message.usage).toMatchObject({ input: 1_000, output: 700, cacheRead: 30_000, cacheWrite: 0 });
 		expect(done.message.usage.totalTokens).toBeGreaterThan(0);
 		expect(done.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
 	});
@@ -611,10 +594,7 @@ describe("streamCursor native replay live run", () => {
 		expect(hasEventType(events, "toolcall_start")).toBe(false);
 		expect(collectThinkingDeltas(events)).toContain("Cursor subagent");
 		expect(done.reason).toBe("stop");
-		expect(done.message.usage).toMatchObject({ input: 1_000, output: 700, cacheRead: 0, cacheWrite: 0 });
-		expect((done.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 30_000,
-		});
+		expect(done.message.usage).toMatchObject({ input: 1_000, output: 700, cacheRead: 30_000, cacheWrite: 0 });
 		expect(done.message.usage.totalTokens).toBeGreaterThan(0);
 		expect(done.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
 	});

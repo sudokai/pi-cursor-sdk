@@ -1,15 +1,21 @@
+// Install the external SDK transport mock before the static provider dependency graph evaluates.
+import "./helpers/cursor-provider-harness.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectCursorCloudLocalState } from "../src/cursor-cloud-local-state.js";
 import { registerCursorRuntimeControls } from "../src/cursor-state.js";
-import { streamCursor } from "../src/cursor-provider.js";
+import { registerCursorSessionScope } from "../src/cursor-session-scope.js";
+import { streamCursor } from "./helpers/cursor-provider-ownership.js";
 import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 import {
 	collectEvents,
+	collectThinkingDeltas,
 	createPiHarness,
+	getDoneEvent,
 	getErrorEvent,
+	getTextEndEvent,
 	makeContext,
 	makeModel,
 	mockCreatedAgent,
@@ -111,11 +117,15 @@ describe("streamCursor cloud request validation", () => {
 		});
 		mockCreatedAgent({ agentId: "bc-00000000-0000-0000-0000-000000000001", send });
 
-		await collectEvents(streamCursor(makeModel("gpt-5.5@1m"), makeContext(), { apiKey: "test-key" }));
+		const events = await collectEvents(streamCursor(makeModel("gpt-5.5@1m"), makeContext(), { apiKey: "test-key" }));
 
 		expect(mockedInspectCursorCloudLocalState).not.toHaveBeenCalled();
 		expect(mockedCreate).toHaveBeenCalledOnce();
 		expect(send).toHaveBeenCalledOnce();
+		expect(getDoneEvent(events).reason).toBe("stop");
+		expect(getTextEndEvent(events).content).toBe("cloud done");
+		expect(collectThinkingDeltas(events)).toContain("Cursor cloud run:");
+		expect(collectThinkingDeltas(events)).not.toContain("raw usage");
 	});
 
 	it("rejects an invalid cloud branch before Agent.create", async () => {
@@ -147,6 +157,7 @@ describe("streamCursor cloud request validation", () => {
 
 	it("rejects an all-invalid --cursor-cloud-env request before SDK calls", async () => {
 		const pi = createPiHarness({ flagValues: { "cursor-cloud-env": "bad-name,CURSOR_SECRET,9INVALID" } });
+		registerCursorSessionScope(pi);
 		registerCursorRuntimeControls(pi);
 		await pi.runSessionStart({ model: makeModel("gpt-5.5@1m") });
 		const send = vi.fn();

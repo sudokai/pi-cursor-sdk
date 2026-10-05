@@ -69,14 +69,13 @@ describe("configured Cursor cost through Pi composition and persistence", () => 
 				.flatMap((entry) => entry.type === "message" && entry.message.role === "assistant" ? [entry.message] : []);
 			expect(assistants).toHaveLength(1);
 			expect(assistants[0]).toMatchObject({ provider: "cursor", model: "grok-4.6", stopReason: "stop", usage: {
-				input: 1000, output: 100, cacheRead: 0, cacheWrite: 0,
-				cursorSdk: { inputTokens: 10000, outputTokens: 100, cacheReadTokens: 8000, cacheWriteTokens: 1000 },
+				input: 1000, output: 100, cacheRead: 8000, cacheWrite: 1000,
 			} });
 			expect(assistants[0]?.usage.cost.total).toBeCloseTo(expectedCost, 10);
 			expect(session.getSessionStats().cost).toBeCloseTo(expectedCost, 10);
-			expect(session.getSessionStats().tokens).toMatchObject({ input: 1000, output: 100, cacheRead: 0, cacheWrite: 0 });
+			expect(session.getSessionStats().tokens).toMatchObject({ input: 1000, output: 100, cacheRead: 8000, cacheWrite: 1000 });
 			expect(assistants[0]?.usage.totalTokens).toBeLessThan(model.contextWindow);
-			expect(assistants[0]?.usage.totalTokens).not.toBe(10100);
+			expect(assistants[0]?.usage.totalTokens).toBe(10100);
 		} finally {
 			await session?.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
 			session?.dispose();

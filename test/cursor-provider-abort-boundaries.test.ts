@@ -1,3 +1,5 @@
+// Install the external SDK transport mock before the static provider dependency graph evaluates.
+import "./helpers/cursor-provider-harness.js";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,7 +8,8 @@ import type { SendOptions } from "@cursor/sdk";
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { streamCursor, __testUtils } from "../src/cursor-provider.js";
+import { streamCursor } from "./helpers/cursor-provider-ownership.js";
+import { __testUtils } from "../src/cursor-provider.js";
 import {
 	asMockCursorRun, collectEvents, collectTextDeltas, getDoneEvent, getErrorEvent, makeContext, makeModel,
 	mockCreatedAgent, registerNativeToolDisplayForTest, resetCursorProviderTestState,

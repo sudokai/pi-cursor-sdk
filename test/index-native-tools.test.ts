@@ -42,7 +42,9 @@ import { CURSOR_ACTIVATE_SKILL_TOOL_NAME } from "../src/cursor-skill-tool.js";
 import { CURSOR_ASK_QUESTION_TOOL_NAME } from "../src/cursor-question-tool.js";
 
 describe("extension native Cursor tool replay", () => {
-	beforeEach(resetIndexExtensionTestState);
+	beforeEach(async () => {
+		await resetIndexExtensionTestState();
+	});
 
 	it("defers native Cursor tool wrapper registration until session_start", async () => {
 		process.env.PI_CURSOR_NATIVE_TOOL_DISPLAY = "1";

@@ -222,13 +222,13 @@ export function registerCursorQuestionTool(pi: CursorQuestionToolExtensionApi): 
 		name: CURSOR_ASK_QUESTION_TOOL_NAME,
 		label: "Cursor question",
 		description:
-			"Ask the user a clarifying question from Cursor. Use when user preferences materially affect the next step; provide options when possible.",
-		promptSnippet: "Ask the user a clarifying question through pi UI when material choices affect Cursor's next step",
+			"Ask the user a clarifying question through pi UI. Do not use this unless the user asked to be prompted; otherwise proceed with a stated assumption.",
+		promptSnippet: "Do not prompt the user through cursor_ask_question unless they asked to be asked",
 		executionMode: "sequential",
 		parameters: CursorAskQuestionParamsSchema,
 		promptGuidelines: [
-			"Use cursor_ask_question only when running a Cursor model and user input would materially change the plan, scope, platform, or implementation path.",
-			"Prefer cursor_ask_question with 2-4 concrete options instead of guessing when Cursor plan mode needs user choices.",
+			"Do not call cursor_ask_question unless the user explicitly asked to be prompted or to choose among options.",
+			"If this tool is available, prefer a reasonable default and state the assumption instead of blocking on a questionnaire.",
 		],
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const questions = normalizeQuestions(params as CursorAskQuestionParams);

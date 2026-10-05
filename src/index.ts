@@ -1,21 +1,24 @@
-import type { ExtensionAPI, ProviderConfig, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { discoverModels, type CursorModelFallbackIssue } from "./model-discovery.js";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { CursorModelFallbackIssue } from "./model-discovery.js";
+import { createCursorModelAuthResync } from "./cursor-model-auth-resync.js";
 import { registerCursorRuntimeControls } from "./cursor-state.js";
 import { registerCursorNativeToolDisplay } from "./cursor-native-tool-display-registration.js";
 import { registerCursorPiToolBridge } from "./cursor-pi-tool-bridge.js";
 import { registerCursorQuestionTool } from "./cursor-question-tool.js";
 import { registerCursorSkillTool } from "./cursor-skill-tool.js";
-import { registerCursorSessionScope } from "./cursor-session-scope.js";
+import { registerCursorProviderBinding } from "./cursor-provider-binding.js";
+import { getCursorSessionScopeSnapshot, registerCursorSessionScope } from "./cursor-session-scope.js";
 import { registerCursorSessionAgentLifecycle } from "./cursor-session-agent-lifecycle.js";
 import { registerCursorSessionAgentLineage } from "./cursor-session-agent-lineage.js";
 import { registerCursorSessionAgentResume } from "./cursor-session-agent-resume.js";
-import { streamCursorLazy } from "./cursor-provider-lazy.js";
-import { CURSOR_API_KEY_CONFIG_VALUE, resolveCursorApiKey } from "./cursor-api-key.js";
+import { resolveCursorApiKey } from "./cursor-api-key.js";
 import { registerCursorFallbackIssueWarning } from "./cursor-fallback-warning.js";
 import { registerCursorAgentsContextDedup } from "./cursor-agents-context-registration.js";
 import { registerCursorOverflowNormalization } from "./cursor-provider-overflow.js";
 import { registerCursorSdkSessionProcessErrorGuard } from "./cursor-sdk-process-error-guard.js";
 import { prepareCursorSessionForCompaction } from "./cursor-session-compaction-prep.js";
+import { registerCursorUsageLedger } from "./cursor-usage-ledger.js";
+import { registerCursorUsageCommand } from "./cursor-usage-command.js";
 
 type CursorExtensionApi =
 	& Pick<ExtensionAPI, "registerProvider" | "registerCommand" | "on">
@@ -31,31 +34,20 @@ type CursorExtensionApi =
 	& Parameters<typeof registerCursorFallbackIssueWarning>[0]
 	& Parameters<typeof registerCursorAgentsContextDedup>[0]
 	& Parameters<typeof registerCursorOverflowNormalization>[0]
-	& Parameters<typeof registerCursorSdkSessionProcessErrorGuard>[0];
-
-function createCursorProviderConfig(models: ProviderModelConfig[]): ProviderConfig {
-	return {
-		name: "Cursor",
-		baseUrl: "https://cursor.com",
-		apiKey: CURSOR_API_KEY_CONFIG_VALUE,
-		api: "cursor-sdk",
-		models,
-		streamSimple: streamCursorLazy,
-	};
-}
-
-function registerCursorProvider(pi: Pick<ExtensionAPI, "registerProvider">, models: ProviderModelConfig[]): void {
-	pi.registerProvider("cursor", createCursorProviderConfig(models));
-}
+	& Parameters<typeof registerCursorSdkSessionProcessErrorGuard>[0]
+	& Parameters<typeof registerCursorUsageLedger>[0];
 
 export default async function (pi: CursorExtensionApi) {
 	// Session cwd must register before other session_start listeners that depend on it.
 	registerCursorSessionScope(pi);
+	registerCursorUsageLedger(pi);
+	registerCursorUsageCommand(pi);
+	const registerCursorProvider = registerCursorProviderBinding(pi);
 	registerCursorSessionAgentLineage(pi);
 	registerCursorSessionAgentLifecycle(pi);
 	registerCursorSessionAgentResume(pi);
 	pi.on("session_before_compact", async () => {
-		await prepareCursorSessionForCompaction();
+		await prepareCursorSessionForCompaction(getCursorSessionScopeSnapshot(pi).scopeKey);
 	});
 	registerCursorRuntimeControls(pi);
 	registerCursorNativeToolDisplay(pi);
@@ -65,39 +57,38 @@ export default async function (pi: CursorExtensionApi) {
 	registerCursorAgentsContextDedup(pi);
 	registerCursorOverflowNormalization(pi);
 	let fallbackIssue: CursorModelFallbackIssue | undefined;
-	const models = await discoverModels({
-		onFallback: (issue) => {
-			fallbackIssue = issue;
-		},
+	let setFallbackIssue: (issue: CursorModelFallbackIssue | undefined) => void = () => {};
+	const catalog = createCursorModelAuthResync((result) => {
+		registerCursorProvider(result.models);
+		fallbackIssue = result.issue;
+		setFallbackIssue(result.issue);
 	});
-
-	if (fallbackIssue) {
-		registerCursorFallbackIssueWarning(pi, fallbackIssue);
-	}
+	// Resync precedes warning dispatch so login cannot emit a stale missing-key warning.
+	pi.on("session_start", async () => {
+		await catalog.refresh();
+	});
+	pi.on("session_shutdown", () => {
+		catalog.close();
+	});
+	await catalog.refresh();
+	setFallbackIssue = registerCursorFallbackIssueWarning(pi, fallbackIssue);
 
 	pi.registerCommand("cursor-refresh-models", {
 		description: "Refresh the live Cursor model catalog without restarting pi",
 		handler: async (_args, ctx) => {
-			let refreshFallbackIssue: CursorModelFallbackIssue | undefined;
-			const apiKey = resolveCursorApiKey(await ctx.modelRegistry.getApiKeyForProvider("cursor"));
-			const refreshedModels = await discoverModels({
-				apiKey,
-				forceRefresh: true,
-				onFallback: (issue) => {
-					refreshFallbackIssue = issue;
-				},
+			const result = await catalog.refresh({
+				force: true,
+				resolveCommandKey: async () => resolveCursorApiKey(await ctx.modelRegistry.getApiKeyForProvider("cursor")),
 			});
-			registerCursorProvider(pi, refreshedModels);
-			if (!ctx.hasUI) return;
-			if (refreshFallbackIssue) {
-				ctx.ui.notify(`Cursor model catalog refresh did not use a live catalog: ${refreshFallbackIssue.message}`, "warning");
+			if (!result || !ctx.hasUI) return;
+			if (result.issue) {
+				ctx.ui.notify(`Cursor model catalog refresh did not use a live catalog: ${result.issue.message}`, "warning");
 			} else {
-				ctx.ui.notify(`Cursor model catalog refreshed with ${refreshedModels.length} model${refreshedModels.length === 1 ? "" : "s"}.`, "info");
+				ctx.ui.notify(`Cursor model catalog refreshed with ${result.models.length} model${result.models.length === 1 ? "" : "s"}.`, "info");
 			}
 		},
 	});
 
-	registerCursorProvider(pi, models);
 	// Register last so session_shutdown cleanup remains protected until other Cursor handlers finish.
 	registerCursorSdkSessionProcessErrorGuard(pi);
 }

@@ -10,8 +10,9 @@ import {
 	mockedCreate,
 	resetCursorProviderTestState,
 } from "./helpers/cursor-provider-harness.js";
-import { streamCursor } from "../src/cursor-provider.js";
+import { streamCursor } from "./helpers/cursor-provider-ownership.js";
 import { registerCursorRuntimeControls } from "../src/cursor-state.js";
+import { registerCursorSessionScope } from "../src/cursor-session-scope.js";
 
 function finishedRun() {
 	return {
@@ -85,6 +86,7 @@ describe("Cursor local force consumption", () => {
 
 	it("does not rearm consumed CLI force on session_start reload", async () => {
 		const pi = createPiHarness({ flagValues: { "cursor-local-force": true } });
+		registerCursorSessionScope(pi);
 		registerCursorRuntimeControls(pi);
 		await pi.runSessionStart({ model: makeModel("gpt-5.5@1m") });
 		const mockSend = vi.fn().mockResolvedValue(finishedRun());

@@ -31,7 +31,6 @@ import { discoverModels } from "../src/model-discovery.js";
 import { acquireSessionCursorAgent, __testUtils as sessionAgentTestUtils } from "../src/cursor-session-agent.js";
 import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 import { streamCursor } from "../src/cursor-provider.js";
-import { streamCursorLazy } from "../src/cursor-provider-lazy.js";
 import { buildCursorPiToolBridgeSnapshot } from "../src/cursor-pi-tool-bridge.js";
 import {
 	CURSOR_ASK_QUESTION_BLOCKED_EVENT,
@@ -48,7 +47,9 @@ const mockedStreamCursor = vi.mocked(streamCursor);
 type DiscoverOptions = Parameters<typeof discoverModels>[0];
 
 describe("extension registration and discovery", () => {
-	beforeEach(resetIndexExtensionTestState);
+	beforeEach(async () => {
+		await resetIndexExtensionTestState();
+	});
 
 	it("keeps one process error guard for the active session lifecycle", async () => {
 		mockedDiscover.mockResolvedValueOnce([]);
@@ -234,7 +235,7 @@ describe("extension registration and discovery", () => {
 		expect(call.config.apiKey).toBe("pi-cursor-sdk-cursor-api-key-placeholder");
 		expect(call.config.api).toBe("cursor-sdk");
 		expect(call.config.models).toBe(mockModels);
-		expect(call.config.streamSimple).toBe(streamCursorLazy);
+		expect(call.config.streamSimple).toEqual(expect.any(Function));
 	});
 
 	it("registers a lazy Cursor stream wrapper that delegates only when invoked", async () => {
@@ -246,7 +247,10 @@ describe("extension registration and discovery", () => {
 		await extensionFactory(pi);
 
 		expect(mockedStreamCursor).not.toHaveBeenCalled();
-		const stream = pi._registered[0].config.streamSimple!(makeModel("composer-2"), normalizeContext(makeContext()), { apiKey: "test-key" });
+		await pi.runSessionStart();
+		const headers = {};
+		await pi.invokeEvent("before_provider_headers", { type: "before_provider_headers", headers });
+		const stream = pi._registered[0].config.streamSimple!(makeModel("composer-2"), normalizeContext(makeContext()), { apiKey: "test-key", headers });
 		const resultPromise = stream.result();
 		await Promise.resolve();
 		const message = makeAssistantMessage("done");
@@ -261,7 +265,13 @@ describe("extension registration and discovery", () => {
 		mockedStreamCursor.mockImplementationOnce(() => {
 			throw new Error(`synchronous provider failure: Bearer ${apiKey}`);
 		});
-		const stream = streamCursorLazy(makeModel("composer-2"), makeContext(), { apiKey });
+		mockedDiscover.mockResolvedValueOnce([]);
+		const pi = createExtensionPi();
+		await extensionFactory(pi);
+		await pi.runSessionStart();
+		const headers = {};
+		await pi.invokeEvent("before_provider_headers", { type: "before_provider_headers", headers });
+		const stream = pi._registered[0].config.streamSimple!(makeModel("composer-2"), normalizeContext(makeContext()), { apiKey, headers });
 		const events: AssistantMessageEvent[] = [];
 		const consumeEvents = (async () => {
 			for await (const event of stream) events.push(event);
@@ -583,7 +593,7 @@ describe("extension registration and discovery", () => {
 		const snapshot = buildCursorPiToolBridgeSnapshot(pi);
 		expect(snapshot.piToolNameToMcpToolName.get(CURSOR_ASK_QUESTION_TOOL_NAME)).toBe("pi__cursor_ask_question");
 		expect(snapshot.tools.find((tool) => tool.piToolName === CURSOR_ASK_QUESTION_TOOL_NAME)?.description).toContain("Ask the user");
-		expect(pi._tools.find((tool) => tool.name === CURSOR_ASK_QUESTION_TOOL_NAME)?.promptSnippet).toContain("clarifying question");
+		expect(pi._tools.find((tool) => tool.name === CURSOR_ASK_QUESTION_TOOL_NAME)?.promptSnippet).toContain("Do not prompt the user");
 	});
 
 	it("parses PI_CURSOR_ASK_QUESTION with default off", () => {
@@ -688,7 +698,7 @@ describe("extension registration and discovery", () => {
 		expect(pi.registerProvider).toHaveBeenCalledTimes(2);
 		expect(pi._registered[0].config.models).toBe(startupModels);
 		expect(pi._registered[1].config.models).toBe(refreshedModels);
-		expect(pi._registered[1].config.streamSimple).toBe(streamCursorLazy);
+		expect(pi._registered[1].config.streamSimple).toBe(pi._registered[0].config.streamSimple);
 		expect(notify).toHaveBeenCalledWith("Cursor model catalog refreshed with 1 model.", "info");
 	});
 

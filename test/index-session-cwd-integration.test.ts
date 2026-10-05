@@ -52,21 +52,22 @@ vi.mock("@cursor/sdk", () => ({
 
 import { Agent, Cursor, type SDKAgent } from "@cursor/sdk";
 import { normalizeContext } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import extensionFactory from "../src/index.js";
 import { discoverModels } from "../src/model-discovery.js";
 import { __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
-import { streamCursorLazy } from "../src/cursor-provider-lazy.js";
 import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 import { __testUtils as cursorPiToolBridgeTestUtils } from "../src/cursor-pi-tool-bridge.js";
 import { __testUtils as cursorHttp1TestUtils } from "../src/cursor-http1.js";
 import { installCursorSessionStoreMock } from "./helpers/cursor-session-store.js";
 import {
 	collectEvents,
-	createExtensionRegistrationPi,
 	makeContext,
 	makeModel,
 	makeProviderModelConfig,
 } from "./helpers/pi-harness.js";
+
+import { createExtensionPi } from "./helpers/index-extension-test-kit.js";
 
 const mockedDiscover = vi.mocked(discoverModels);
 const mockedAgentCreate = vi.mocked(Agent.create);
@@ -98,15 +99,28 @@ describe("extension session cwd integration", () => {
 	it("passes pi session cwd from extension registration through streamSimple to Agent.create", async () => {
 		const sessionDir = mkdtempSync(join(tmpdir(), "pi-cursor-index-agent-cwd-"));
 		try {
-			const pi = createExtensionRegistrationPi();
+			const pi = createExtensionPi();
+			const manager = SessionManager.inMemory(sessionDir);
+			pi.appendEntry.mockImplementation((kind, data) => { manager.appendCustomEntry(kind, data); });
 			await extensionFactory(pi);
-			await pi.runSessionStart({ cwd: sessionDir, hasUI: false });
+			const ctx = { cwd: sessionDir, hasUI: false, sessionManager: {
+				getSessionId: () => manager.getSessionId(),
+				getSessionFile: () => manager.getSessionFile(),
+				getLeafId: () => manager.getLeafId(),
+				getLeafEntry: () => manager.getLeafEntry(),
+				getBranch: () => manager.getBranch(),
+				buildSessionProjection: () => manager.buildSessionProjection(),
+			} };
+			await pi.runSessionStart(ctx);
 
 			expect(pi.registerProvider).toHaveBeenCalledOnce();
 			const streamSimple = pi._registered[0]?.config.streamSimple;
-			expect(streamSimple).toBe(streamCursorLazy);
+			expect(streamSimple).toEqual(expect.any(Function));
 
-			await collectEvents(streamSimple!(makeModel("composer-2.5"), normalizeContext(makeContext()), { apiKey: "test-key" }));
+			const headers = {};
+			await pi.invokeEvent("before_provider_headers", { type: "before_provider_headers", headers }, ctx);
+			const events = await collectEvents(streamSimple!(makeModel("composer-2.5"), normalizeContext(makeContext()), { apiKey: "test-key", headers }));
+			expect(events.at(-1)).toMatchObject({ type: "done", reason: "stop" });
 
 			expect(mockedAgentCreate).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -118,6 +132,9 @@ describe("extension session cwd integration", () => {
 				}),
 			);
 			expect(mockedCursorConfigure).not.toHaveBeenCalled();
+			expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "pi-cursor-sdk:usage-origin-v1")).toHaveLength(1);
+			expect(manager.getEntries().filter(entry => entry.type === "custom" && entry.customType === "pi-cursor-sdk:usage-v1").map(entry => entry.type === "custom" && (entry.data as { kind: string }).kind)).toEqual(["start", "run", "terminal", "billing"]);
+			await pi.runSessionShutdown({ reason: "quit" });
 		} finally {
 			rmSync(sessionDir, { recursive: true, force: true });
 		}

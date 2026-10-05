@@ -1,10 +1,9 @@
 import { CursorLiveRunAbortError } from "./cursor-live-run-coordinator.js";
 import { drainExistingCursorLiveRunBeforeSend } from "./cursor-provider-live-run-drain.js";
-import { getCursorSessionCwd } from "./cursor-session-scope.js";
 import { installCursorSdkProcessErrorGuard } from "./cursor-sdk-process-error-guard.js";
 import type { CursorRuntime } from "./cursor-config.js";
 import { CursorSdkEventDebugSink } from "./cursor-sdk-event-debug.js";
-import { awaitFinalizeCursorRunOutcome } from "./cursor-provider-turn-finalize.js";
+import { awaitFinalizeCursorRunOutcome, recordCursorProviderAbandonUsage } from "./cursor-provider-turn-finalize.js";
 import {
 	discardIncompleteToolsFromPrepared,
 	emitCursorLiveTurn,
@@ -15,8 +14,10 @@ import {
 	requireCursorApiKey,
 	resolveCursorProviderTurnConfig,
 } from "./cursor-provider-turn-prepare.js";
-import { CursorStaleLocalAuthRetryError } from "./cursor-provider-errors.js";
-import { prepareAndSendCursorTurnRetryingStaleAuth, shouldRetryStaleLocalCursorAuthWaitOutcome } from "./cursor-provider-stale-auth-retry.js";
+import {
+	shouldRetryStaleLocalAuthFailure,
+	shouldRetryStaleLocalCursorAuthWaitOutcome,
+} from "./cursor-provider-stale-auth-retry.js";
 import { sendCursorProviderTurn } from "./cursor-provider-turn-send.js";
 import type {
 	CursorProviderTurnPrepareResult,
@@ -24,14 +25,45 @@ import type {
 	CursorProviderTurnSendResult,
 	LiveCursorProviderTurnRuntime,
 	LocalCursorProviderTurnPrepareResult,
+	StartedCursorProviderTurn,
 } from "./cursor-provider-turn-types.js";
 
 export type { CursorProviderTurnRunnerParams } from "./cursor-provider-turn-types.js";
 
-type LocalLivePreparedTurn = LocalCursorProviderTurnPrepareResult & { runtime: LiveCursorProviderTurnRuntime };
+type LocalLivePreparedTurn = StartedCursorProviderTurn & LocalCursorProviderTurnPrepareResult & { runtime: LiveCursorProviderTurnRuntime };
 
-function requireLocalLivePreparedTurn(prepared: CursorProviderTurnPrepareResult): LocalLivePreparedTurn {
-	if (prepared.runtimeTarget !== "local" || prepared.runtime.kind !== "live") {
+type CursorProviderAttemptProgress =
+	| { kind: "empty" }
+	| { kind: "prepared"; prepared: CursorProviderTurnPrepareResult }
+	| { kind: "started"; prepared: StartedCursorProviderTurn }
+	| { kind: "sent"; prepared: StartedCursorProviderTurn; sendResult: CursorProviderTurnSendResult }
+	| {
+			kind: "live";
+			prepared: StartedCursorProviderTurn;
+			sendResult: CursorProviderTurnSendResult;
+			liveCompletion: CursorLiveRunCompletion;
+	  };
+
+function getAttemptPreparedTurn(progress: CursorProviderAttemptProgress): CursorProviderTurnPrepareResult | undefined {
+	return progress.kind === "empty" ? undefined : progress.prepared;
+}
+
+function getAttemptStartedTurn(progress: CursorProviderAttemptProgress): StartedCursorProviderTurn | undefined {
+	return progress.kind === "started" || progress.kind === "sent" || progress.kind === "live"
+		? progress.prepared
+		: undefined;
+}
+
+function getAttemptSendResult(progress: CursorProviderAttemptProgress): CursorProviderTurnSendResult | undefined {
+	return progress.kind === "sent" || progress.kind === "live" ? progress.sendResult : undefined;
+}
+
+function getAttemptLiveCompletion(progress: CursorProviderAttemptProgress): CursorLiveRunCompletion | undefined {
+	return progress.kind === "live" ? progress.liveCompletion : undefined;
+}
+
+function requireLocalLivePreparedTurn(prepared: StartedCursorProviderTurn): LocalLivePreparedTurn {
+	if (prepared.runtimeTarget !== "local" || prepared.execution !== "conversation" || prepared.runtime.kind !== "live") {
 		throw new Error("Cursor live run requires a local live prepared turn");
 	}
 	return prepared as LocalLivePreparedTurn;
@@ -54,9 +86,7 @@ export class CursorProviderTurnRunner {
 
 	async run(sdkProcessErrorGuard: ReturnType<typeof installCursorSdkProcessErrorGuard>): Promise<void> {
 		const { stream, partial, model, context, options, sdkEventDebugRef } = this.params;
-		let prepared: CursorProviderTurnPrepareResult | undefined;
-		let sendResult: CursorProviderTurnSendResult | undefined;
-		let liveCompletion: CursorLiveRunCompletion | undefined;
+		let attemptCleanupComplete = false;
 		const runFinalizer = new CursorRunFinalizer({
 			runnerParams: this.params,
 			sdkEventDebug: () => this.sdkEventDebug,
@@ -67,22 +97,30 @@ export class CursorProviderTurnRunner {
 
 		try {
 			this.throwIfAborted();
-			const cwd = getCursorSessionCwd();
+			const { scope } = this.params;
+			const cwd = scope.cwd;
 			this.sdkEventDebug = CursorSdkEventDebugSink.maybeCreate({
 				cwd,
 				modelId: model.id,
 				provider: model.provider,
+				scope,
 			});
 			sdkEventDebugRef.current = this.sdkEventDebug;
 			this.sdkEventDebug?.recordContextSnapshot(context);
-			// Resolved once here, before any drain await, so the drain decision and the
-			// prepare dispatch below always act on the same config snapshot.
-			const resolvedConfig = resolveCursorProviderTurnConfig(cwd);
+			const resolvedConfig = resolveCursorProviderTurnConfig(cwd, scope.projectTrusted, scope.scopeKey);
 			this.runtimeTarget = resolvedConfig.runtime.value;
-			if (resolvedConfig.runtime.value === "local") {
+			if (resolvedConfig.runtime.value === "local" && this.params.request.purpose === "normal") {
 				if (
-					(await drainExistingCursorLiveRunBeforeSend(stream, partial, model, context, options?.signal, this.sdkEventDebug)) ===
-					"stream_ended"
+					(await drainExistingCursorLiveRunBeforeSend(
+						stream,
+						partial,
+						model,
+						context,
+						options?.signal,
+						this.sdkEventDebug,
+						scope.scopeKey,
+						this.params.request.occupancyFloor,
+					)) === "stream_ended"
 				) {
 					return;
 				}
@@ -91,38 +129,60 @@ export class CursorProviderTurnRunner {
 
 			const resolvedApiKey = requireCursorApiKey(options);
 			this.resolvedApiKey = resolvedApiKey;
-			({ prepared, sendResult } = await prepareAndSendCursorTurnRetryingStaleAuth({
-				prepareTurn: async (retry) => {
-					// Assign before send so a throwing send still has a prepared turn for cleanup.
-					prepared = await prepareCursorProviderTurn({
+			for (let attempt = 0; attempt < 2; attempt += 1) {
+				let progress: CursorProviderAttemptProgress = { kind: "empty" };
+				let retrying = false;
+				try {
+					const prepared = await prepareCursorProviderTurn({
 						params: this.params,
 						cwd,
 						resolvedApiKey,
 						sdkEventDebug: this.sdkEventDebug,
 						throwIfAborted: () => this.throwIfAborted(),
 						resolvedConfig,
-						forceCreate: retry?.forceCreate,
+						forceCreate: attempt === 0 ? undefined : true,
 					});
-					return prepared;
-				},
-				sendTurn: (turn) =>
-					sendCursorProviderTurn({
+					progress = { kind: "prepared", prepared };
+					const usage = await this.params.usageRecorder.start({
+						agent: prepared.agent,
+						runtime: prepared.runtimeTarget,
+						model: { id: model.id, provider: model.provider, cost: { ...model.cost } },
+						modelSelection: prepared.meta.modelSelection,
+						purpose: this.params.request.purpose,
+						...(prepared.runtimeTarget === "local" ? { storeIdentity: prepared.storeIdentity.stateRoot } : {}),
+						resumed: prepared.runtimeTarget === "local" && prepared.execution === "conversation" && prepared.sessionAgentLease.resumed === true,
+						newlyCreated: prepared.runtimeTarget !== "local" || prepared.execution === "summary" || (prepared.sessionAgentLease.created && !prepared.sessionAgentLease.resumed),
+					}).catch((error: unknown) => {
+						this.params.usageRecorder.notePersistenceFailure(error);
+						throw error;
+					});
+					const started: StartedCursorProviderTurn = { ...prepared, usage };
+					progress = { kind: "started", prepared: started };
+					if (started.runtime.liveRun) {
+						started.runtime.liveRun.onAbandon = async () => {
+							await recordCursorProviderAbandonUsage(started);
+						};
+					}
+
+					const sendResult = await sendCursorProviderTurn({
 						params: this.params,
-						prepared: turn,
+						prepared: started,
 						sdkEventDebug: this.sdkEventDebug,
 						sdkProcessErrorGuard,
 						throwIfAborted: () => this.throwIfAborted(),
 						resolvedApiKey,
-					}),
-				afterSend: async (turn, sent) => {
-					if (turn.runtime.kind === "live") {
-						const livePrepared = requireLocalLivePreparedTurn(turn);
-						liveCompletion = runFinalizer.startLiveRunCompletion({
-							send: sent.send,
+					});
+					progress = { kind: "sent", prepared: started, sendResult };
+
+					if (started.runtime.kind === "live") {
+						const livePrepared = requireLocalLivePreparedTurn(started);
+						const liveCompletion = runFinalizer.startLiveRunCompletion({
+							send: sendResult.send,
 							prepared: livePrepared,
 							modelId: model.id,
 							discardIncompleteTools: (outcome) => discardIncompleteToolsFromPrepared(livePrepared, outcome),
 						});
+						progress = { kind: "live", prepared: started, sendResult, liveCompletion };
 						await emitCursorLiveTurn({
 							params: this.params,
 							prepared: livePrepared,
@@ -133,36 +193,84 @@ export class CursorProviderTurnRunner {
 					}
 
 					const outcomePromise = awaitFinalizeCursorRunOutcome({
-						run: sent.send.run,
-						prepared: turn,
-						cursorAgentMessageOffset: sent.send.cursorAgentMessageOffset,
+						run: sendResult.send.run,
+						prepared: started,
+						cursorAgentMessageOffset: sendResult.send.cursorAgentMessageOffset,
 						modelId: model.id,
 						signal: options?.signal,
-						runResultFallback: sent.send.run.result,
-						runErrorFallback: sent.send.run.error,
-						resolvedApiKey: this.resolvedApiKey,
+						runResultFallback: sendResult.send.run.result,
+						runErrorFallback: sendResult.send.run.error,
+						resolvedApiKey,
 						optionsApiKey: options?.apiKey,
 						sdkEventDebug: this.sdkEventDebug,
-						contextWindowAgentId: turn.contextWindowAgentId,
+						contextWindowAgentId: prepared.contextWindowAgentId,
 					});
-					turn.lifecycle.trackRunCompletion(outcomePromise);
+					started.lifecycle.trackRunCompletion(outcomePromise);
 					const finalized = await outcomePromise;
-					if (shouldRetryStaleLocalCursorAuthWaitOutcome(turn, finalized.outcome)) {
-						throw new CursorStaleLocalAuthRetryError();
+					if (attempt === 0 && shouldRetryStaleLocalCursorAuthWaitOutcome(
+						started,
+						finalized.outcome,
+						this.params.partial.content.length > 0,
+					)) {
+						this.recordStaleAuthRetry(started);
+						await runFinalizer.discardStaleAuthAttempt({ prepared: started, sendResult, liveCompletion: undefined });
+						retrying = true;
+						continue;
 					}
 					await runFinalizer.applyTerminalEvent({
 						kind: "direct",
-						prepared: turn,
+						prepared: started,
 						outcome: finalized.outcome,
 						displayOnlyTraceBlock: finalized.displayOnlyTraceBlock,
 					});
-				},
-				sdkEventDebug: this.sdkEventDebug,
-			}));
+					return;
+				} catch (error) {
+					const started = getAttemptStartedTurn(progress);
+					if (attempt === 0 && started && shouldRetryStaleLocalAuthFailure(
+						started,
+						error,
+						this.params.partial.content.length > 0,
+					) && !options?.signal?.aborted) {
+						this.recordStaleAuthRetry(started);
+						await runFinalizer.discardStaleAuthAttempt({
+							prepared: started,
+							sendResult: getAttemptSendResult(progress),
+							liveCompletion: getAttemptLiveCompletion(progress),
+						});
+						retrying = true;
+						continue;
+					}
+					await runFinalizer.applyTerminalEvent({
+						kind: "error",
+						prepared: getAttemptStartedTurn(progress) ?? getAttemptPreparedTurn(progress),
+						error,
+					});
+					return;
+				} finally {
+					if (!retrying) {
+						await runFinalizer.cleanup(
+							getAttemptPreparedTurn(progress),
+							getAttemptSendResult(progress),
+							getAttemptLiveCompletion(progress),
+						);
+						attemptCleanupComplete = true;
+					}
+				}
+			}
 		} catch (error) {
-			await runFinalizer.applyTerminalEvent({ kind: "error", prepared, error });
+			await runFinalizer.applyTerminalEvent({ kind: "error", prepared: undefined, error });
 		} finally {
-			await runFinalizer.cleanup(prepared, sendResult, liveCompletion);
+			if (!attemptCleanupComplete) await runFinalizer.cleanup(undefined, undefined, undefined);
+		}
+	}
+
+	private recordStaleAuthRetry(prepared: StartedCursorProviderTurn): void {
+		try {
+			this.sdkEventDebug?.recordProviderEvent("stale_local_agent_unauthenticated_retry", {
+				sendPlanReason: prepared.meta.sendPlan.reason,
+			});
+		} catch {
+			// Debug capture is optional and must never change provider execution.
 		}
 	}
 

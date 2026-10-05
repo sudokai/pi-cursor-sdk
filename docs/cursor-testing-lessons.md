@@ -1,12 +1,12 @@
 # Cursor Testing Lessons
 
-> **Platform Smoke:** The required local cross-platform release gate is `npm run smoke:platform:all`; cloud-runtime changes additionally require `npm run smoke:cloud`. See [the platform smoke runbook](./platform-smoke.md). For portable guidance, see the [implementation reference](./platform-smoke-implementation.md#portability-to-other-pi-extensions) and the repo-local `docs/pi-extension-platform-testing.md` from a Crabbox checkout. The live smoke checklist remains useful for inner-loop development but is not the release gate.
+> **Cost-conscious verification:** Offline/faux checks first; reuse exact-input retained evidence. Only changed behavior needing new real-service proof warrants the smallest meaningful live check on one representative environment. Docs/metadata-only changes need no paid runs. No full paid campaign replay, matrix-only host coverage, or automatic paid retries. No paid Cloud testing for generic PRs/releases; only explicitly Cursor Cloud-focused PRs/issues may select a necessary focused Cloud check. Automated Cursor PR reviews continue unchanged. `npm run smoke:platform:all` is optional comprehensive coverage. See [the platform smoke runbook](./platform-smoke.md) and its [implementation reference](./platform-smoke-implementation.md#portability-to-other-pi-extensions).
 
 ## Purpose
 
 This document records maintainer testing lessons for `pi-cursor-sdk`. It complements unit tests and the [Cursor live smoke checklist](./cursor-live-smoke-checklist.md). Use it when adding regression coverage, debugging false-green releases, or building isolated smoke harnesses.
 
-For a **minimal one-session dogfood pass** (baseline env, one native + one bridge call, JSONL ID patterns, bootstrap manifest, edit diff card), use the [Cursor dogfood checklist](./cursor-dogfood-checklist.md) as inner-loop evidence before running the platform smoke gate.
+For a **minimal one-session dogfood pass** (baseline env, one native + one bridge call, JSONL ID patterns, bootstrap manifest, edit diff card), use the [Cursor dogfood checklist](./cursor-dogfood-checklist.md) only when its selected changed behavior needs new live proof; do not follow it with a full paid matrix by default.
 
 ## Core lesson: integration-shaped bugs beat unit mocks
 
@@ -50,9 +50,9 @@ If resync runs but `context.tools` is still stale (e.g. only `read` listed), the
 
 ## Stock/transcript provider contract
 
-`test/cursor-provider-pi-context.test.ts` drives real `ModelRuntime` / `ModelRegistry` requests into `streamCursor`, with only Cursor SDK execution mocked. Run it against each supported host with all Pi peer imports pinned to that host (including nested native imports); a top-level package version alone is not resolution evidence. Cover official Pi 0.87.1, official latest, and current `fitchmultz/pi` main. The exact development Pi cohort is 0.99.1, with host TypeBox 1.3.27.
+`test/cursor-provider-pi-context.test.ts` drives real `ModelRuntime` / `ModelRegistry` requests into `streamCursor`, with only Cursor SDK execution mocked. Run it against each supported host with all Pi peer imports pinned to that host (including nested native imports); a top-level package version alone is not resolution evidence. Cover official Pi 0.87.1, official latest, and current `fitchmultz/pi` main. The exact development Pi cohort is 1.0.3, with host TypeBox 1.3.27.
 
-The test covers bootstrap/incremental prompts, empty-vs-absent request tools, native replay/drain, cloud fresh/bootstrap selection, and actual host prompt serialization for context files and skills. `test/native-cursor-flow.test.mjs` additionally exercises the compiled extension through the real loader and registered Cursor provider, substituting only the external SDK transport/storage. It verifies actual bridge tool execution, replay without file access, persisted usage/lineage, tree, compaction, queued steering, abort and reload/disposal. Explicit `tools` is an allowlist; use `defaultTools` for a native fixture that allows replay wrappers to activate. It is offline contract evidence, not a replacement for the required live platform/cloud release gates.
+The test covers bootstrap/incremental prompts, empty-vs-absent request tools, native replay/drain, cloud fresh/bootstrap selection, and actual host prompt serialization for context files and skills. `test/native-cursor-flow.test.mjs` additionally exercises the compiled extension through the real loader and registered Cursor provider, substituting only the external SDK transport/storage. It verifies actual bridge tool execution, replay without file access, persisted usage/lineage, tree, compaction, queued steering, abort and reload/disposal. Explicit `tools` is now an allowlist, not merely an initial active set; use `defaultTools` for a native fixture that allows replay wrappers to activate. It is offline contract evidence. Add live proof only for changed behavior that still needs real-service evidence under the cost policy above; do not rerun unchanged live lanes or infer full live coverage from offline tests.
 
 ## Auth: use `auth.json`, not only env
 
@@ -132,6 +132,7 @@ Every live check should use its own `--session-dir` under the isolated tree. Do 
 | Inherited shell env | mise/profile hooks hung or polluted runs | Use `env -i ... MISE_DISABLE=1` for isolated pi calls |
 | No per-check timeout | One stuck prompt blocked entire harness | Wrap each live check with timeout/watchdog |
 | stdout-only assertions | Missed replay failures persisted only in JSONL | Scan JSONL for `Tool grep/cursor/find/ls not found` |
+| Unspecified “visible” marker source | Conversation recall became an empty-workspace search | Specify conversation history only, with no tools or file inspection; compare actual send payload and SDK events before blaming history loss |
 | Naive JSONL substring scan | Successful `read` of docs mentioning replay errors looked like failures | `validate-smoke-jsonl.mjs` only flags error `toolResult` / error assistant messages |
 | Plan strip only on first turn | Under-tested multi-turn resync | Shim strips on every `turn_start`; stress multi-turn separately |
 | Assuming env auth equals pi auth | False "blocked" or false "pass" in CI-like shells | Check `auth.json` provider keys explicitly when needed |
@@ -169,24 +170,31 @@ Successful tool results are ignored even when file contents mention those string
 
 Session summaries can hide per-message usage bugs. When investigating token or compaction regressions, inspect assistant message `usage` rows directly:
 
-- `usage.input` and `usage.output` are additive spend-style counters for the assistant turn. `usage.cacheRead`/`usage.cacheWrite` on emitted pi messages are **zeroed**: SDK `turn-ended` cache fields are billing sums across invocations (verified against the Cursor usage-events CSV), never context occupancy, and pi-ai's silent-overflow check reads `input + cacheRead` as prompt size. Real SDK billing rides on the host-ignored `usage.cursorSdk` carrier (`{ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }`).
-- `usage.totalTokens` is pi context occupancy for that turn, not a value to sum across all assistant messages, and must never be copied from SDK billing totals.
-- Distinguish published SDK `TokenUsage` from observed raw local `turn-ended.usage`: the installed SDK's published transform adds all four fields, while captured raw usage keeps `inputTokens` as the full prompt and cache fields partition it. Map raw turn-ended samples to pi as uncapped-uncached `input = inputTokens - cacheReadTokens - cacheWriteTokens`; keep the raw cache billing on `usage.cursorSdk`.
-- Cursor SDK `inputTokens` may be a multi-invocation billing sum. Spend may land on the stop message, but occupancy must stay a local context estimate so compaction cannot treat a billing blob as window fill.
-- No single assistant message should persist SDK/full-agent-context-sized occupancy outside the selected model window.
+- Native `usage.input`, `output`, `cacheRead`, and `cacheWrite` must sum to `totalTokens` and describe the same current context. Native overflow reads prompt components, not only total; keeping a small total beside cumulative billed input/cache still triggers false compaction.
+- Native configured-price estimates are per emitted message, not complete Cursor invoice totals. Recorded raw/reported/billed sources overlap and must not be summed.
+- Distinguish observed LOCAL full-prompt `turn-ended.usage` from public billed `AgentUsage`: normalize raw input by subtracting its cache partition once. Billed input is already uncached. The captured SDK 1.0.32 case has raw 4232 input / 4096 cache read / 3 output, corrected 136 uncached / 4096 cache / 3 output = 4235; original additive wait/handle total 8331 remains reported telemetry only. Public getter transport coverage verifies the documented disjoint billed contract; do not invent successful live endpoint access when it was unavailable.
+- No single assistant message should persist SDK/full-agent-context-sized usage outside the selected model window.
 - Real bad-session evidence should be reduced to a sanitized fixture, like `test/fixtures/cursor-run-usage-compaction-poison.jsonl`, instead of committing raw session JSONL.
 
-The compaction poison fixture mirrors the observed failure shape: one assistant message with `RunResult`-sized input/cache-read counts near 1M immediately before compaction. Regression coverage should prove that occupancy (`totalTokens`) stays bounded even when spend fields reflect large SDK billing.
+The compaction poison fixture mirrors the observed failure shape: one assistant message with `RunResult`-sized input/cache-read counts near 1M immediately before compaction. Regression coverage proves that such usage falls back to bounded pi estimates before reaching `AssistantMessage.usage`.
+
+Use native registered-provider tests for the full scheduler boundary. `test/native-cursor-flow.test.mjs` covers large cumulative bills with no false compaction, genuine pressure still auto-compacting, and manual compaction persisting after reopen. Its floor controls exercise actual compaction/context-edit source chronology, future/equal clocks, quoted wrappers and request-local transformations without mocking Pi's scheduler, receipt or projection. `test/cursor-provider-binding.test.ts` additionally verifies actual native header/signal identity through sequential compaction summaries, retry and tree navigation.
+
+For LOCAL summary isolation, inspect actual SDK create/send options and persisted lineage, not assistant text alone: tools/settings empty, no bridge/MCP/manifest, mode `agent`, fresh IDs, no ordinary resume writes, agent/store disposed. Materialize the fixture's temporary directory and assert it is removed **when the native operation returns**; merely observing `dispose()` or eventual removal misses a terminal-emission/cleanup race. SDK fixtures must honor `tools: []` instead of replaying historical marker-driven tool calls despite the restriction.
+
+`test/cursor-usage-ledger.test.ts` uses real public SessionManager custom entries and bounded filesystem journals. It protects restart, optional mirror failure, backward/equal snapshot clocks, revised/aggregate-only/large bills, linear compact-revision storage, unavailable-to-late observations, abandon without a billing fetch, late abort, owner/sibling switches, inherited cross-directory gaps, lost native claims, pricing tiers, torn-tail prefix export/native-fork recovery and malformed/symlink files. Export is a canonical view of facts and uncertainty, not an invented client-run billing join. A failed durable append must not advance recognized accounting.
+
+For supported official hosts without committing a repair, use `node scripts/ci-compatibility.mjs --working-tree --official-only --versions 0.87.1,0.99.1,1.0.3`. This hashes an isolated source snapshot, builds/packs it, tests package loading and runs real native session contracts. Keep matching host-peer resolution and exact source evidence; offline SDK transport substitution proves integration, not live service availability. See [context/accounting boundaries](./cursor-model-ux-spec.md#context-and-accounting-boundaries) for the operational ledger ceiling and public-API limits.
 
 ### False-positive edge case (2026-05-23)
 
 Plan-strip live smoke can make Cursor `read` testing docs that *document* replay failure strings. A naive whole-record JSON scan reported four failures from one successful `read` toolResult (`isError: false`).
 
-When changing replay scan logic:
+For changed replay scan logic, use offline checks and valid exact-input retained evidence first. These are selectable evidence criteria, not a mandatory paid checklist:
 
-1. Update `scripts/validate-smoke-jsonl.mjs`
-2. Add/adjust cases in `test/validate-smoke-jsonl.test.ts` (error toolResult must still fail; successful read of doc text must pass)
-3. Re-run `npm run smoke:isolated` on a packed temp install before release
+1. Update `scripts/validate-smoke-jsonl.mjs` for the intended scanner behavior.
+2. Add/adjust cases in `test/validate-smoke-jsonl.test.ts` (error toolResult must still fail; successful read of doc text must pass).
+3. Use offline packed-install checks (`SKIP_LIVE=1 npm run smoke:isolated`) or valid exact-input retained proof for packaging/replay evidence. Only if the changed behavior still needs real-service proof, select the smallest meaningful existing live check on one representative environment; do not automatically run the full paid `npm run smoke:isolated` sequence. Keep the selected check's replay assertions, persisted JSONL, visual proof when relevant, and cleanup intact.
 
 ## Plan-mode regression scenario
 
@@ -210,20 +218,33 @@ Pass criteria:
 
 ## Local validation ladder
 
-Run local checks first, then the local platform smoke gate before claiming release-ready for provider/runtime changes. Add `npm run smoke:cloud` for cloud-runtime changes:
+Run offline checks first, then reuse retained proof whose tested inputs are unchanged. If changed behavior still needs real-service proof, choose one existing meaningful check on a representative environment. Do not run every command below as a paid ladder; docs/metadata-only changes need zero paid runs.
 
-TypeScript 7 owns builds and type checks. `@typescript/typescript6` is dev-only for the AST architecture test because TypeScript 7 has no stable compiler API. Vitest 5 defaults `clearMocks` to `true`.
+TypeScript 7 owns builds and type checks. `@typescript/typescript6` is dev-only for AST architecture and installed-SDK contract tests because TypeScript 7 has no stable compiler API. Vitest 5 defaults `clearMocks` to `true`.
 
 ```bash
 npm test
 npm run typecheck
 npm pack --dry-run
-SKIP_LIVE=1 npm run smoke:isolated
-npm run smoke:isolated            # inner-loop helper; requires auth.json or CURSOR_API_KEY
-npm run smoke:live                # inner-loop partial tmux checklist subset
-npm run smoke:platform:doctor
+SKIP_LIVE=1 npm run smoke:isolated # offline helper
+```
+
+Only when changed behavior requires new local service proof, select the relevant existing suite (example: restart) and one representative target:
+
+```bash
+node scripts/platform-smoke.mjs run --target macos --suite cursor-local-resume-restart
+```
+
+Optional comprehensive coverage, not a default ship step:
+
+```bash
 npm run smoke:platform:all
-npm run smoke:cloud              # required for cloud-runtime changes
+```
+
+Only for a PR/issue explicitly focused on Cursor Cloud, and only if this coverage is necessary (the multi-lane matrix is not mandatory):
+
+```bash
+npm run smoke:cloud
 ```
 
 After changing `scripts/validate-smoke-jsonl.mjs` or replay scan expectations, also run:
@@ -232,16 +253,18 @@ After changing `scripts/validate-smoke-jsonl.mjs` or replay scan expectations, a
 npm test -- test/validate-smoke-jsonl.test.ts
 ```
 
-Then use the [Cursor live smoke checklist](./cursor-live-smoke-checklist.md) only for focused inner-loop surfaces the scripts do not cover (bridge MCP, abort/cancel, full TUI observation, packaging review, cleanup) before rerunning the local platform smoke gate and, for cloud-runtime changes, `npm run smoke:cloud`.
+Use the [Cursor live smoke checklist](./cursor-live-smoke-checklist.md) as a menu for necessary changed-behavior proof the selected script does not cover, not a full paid campaign. Keep distinct behavior assertions, persisted evidence, visual inspection when relevant, and cleanup intact. Diagnose failures offline; no automatic paid retries.
 
 ## What belongs in CI vs platform/manual smoke
 
 - **CI / default `npm test`:** mocked provider tests, extension lifecycle tests, JSONL validator tests, script syntax/help checks. No live Cursor calls.
-- **Local platform release gate:** `npm run smoke:platform:all` (runs doctor first). Requires real Cursor auth and cross-platform Crabbox setup.
-- **Cloud runtime release gate:** `npm run smoke:cloud` for PRs that touch actual cloud runtime execution.
-- **Focused manual smoke:** `npm run smoke:isolated`, `npm run smoke:live`, and selected live-checklist sections for inner-loop debugging of behavior mocks cannot reproduce.
+- **Focused local live proof:** a necessary existing single-suite/single-target check for changed behavior only. Reuse valid retained proof instead of repeating unchanged lanes.
+- **Comprehensive local matrix:** `npm run smoke:platform:all` (doctor first), optional rather than an unconditional commit/release gate.
+- **Cloud testing exception:** no paid Cloud testing for generic PRs/releases. Only PRs/issues explicitly focused on Cursor Cloud may select a necessary focused Cloud check. Cloud file touch alone does not qualify; the multi-lane `npm run smoke:cloud` is not mandatory. Run/evidence and agent/repository cleanup contracts remain intact.
+- **Automated Cursor PR reviews:** continue unchanged; do not disable them or introduce extra push/review churn for testing.
+- **Manual helpers:** `smoke:isolated`, `smoke:live`, and selected checklist sections are available, but run only the smallest necessary check.
 
-If platform smoke auth or target setup is unavailable, report the release as **blocked**, not skipped-ready.
+If a selected necessary live check lacks auth or setup, report that specific proof gap, not a pass. Optional unselected matrix lanes do not block landing.
 
 ## Cursor SDK event capture probe
 
@@ -266,7 +289,7 @@ The script writes timestamped artifacts under `--out` (default `/tmp/pi-cursor-s
 
 Stdout prints artifact paths and summary counts only. Raw payloads stay on disk and may contain local paths, project text, tool args/results, or secrets — do not commit or share them.
 
-Hard repo rule: Cursor SDK behavior claims must come from the installed `@cursor/sdk` package and/or https://cursor.com/docs/sdk/typescript, not from memory or ad-hoc probes alone. Current validation targets Node 24+, exact `@cursor/sdk@1.0.32`, official Pi 0.87.1/latest, and current `fitchmultz/pi` main.
+Hard repo rule: Cursor SDK behavior claims must come from the installed `@cursor/sdk` package and/or https://cursor.com/docs/sdk/typescript, not from memory or ad-hoc probes alone. Current validation targets Node 24+, exact `@cursor/sdk@1.0.35`, official Pi 0.87.1/latest, and current `fitchmultz/pi` main.
 
 ## Pi provider SDK event capture
 
@@ -459,3 +482,5 @@ rg '"type": "toolCall"|Tool call \(Cursor|cursor-replay-' "$SMOKE_DIR/session"/*
 - `scripts/lib/` — maintainer plumbing (CLI arg parsing, secret-aware `fail()`, child-process shutdown, shell timeout/auth helpers). Re-exports `shared/` helpers so published smoke/debug scripts stay aligned with provider runtime (`test/maintainer-scripts-lib.test.ts`).
 - `test/helpers/pi-harness.ts` — canonical fake pi/extension harness (`createPiHarness`, shared model/context/event helpers)
 - `test/helpers/cursor-provider-harness.ts` — Cursor SDK provider mocks and stream helpers (re-exports pi-harness fixtures; `createNativeToolDisplayPiForTest` for native replay)
+
+Compatibility campaign watchdogs must bound setup and suite phases separately. A Linux run passed all unit assertions in 153.52 seconds but exhausted the old combined 180-second build/verify/native command budget as native tests started; killing only npm left children alive while cleanup removed their workspace. The campaign now gives build, verification and native tests independent command budgets, stops owned POSIX descendants on a watchdog error, and allows twenty minutes for the complete two-host job. Keep every individual case deadline/assertion unchanged; downstream ENOENT after workspace removal is teardown evidence, not a product regression.

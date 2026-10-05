@@ -1,213 +1,58 @@
-import { AuthenticationError } from "@cursor/sdk";
-import type { LocalAgentStore, SDKAgent } from "@cursor/sdk";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { AUTH_CURSOR_SDK_ERROR_MESSAGE, CursorStaleLocalAuthRetryError } from "../src/cursor-provider-errors.js";
 import {
-	prepareAndSendCursorTurnRetryingStaleAuth,
+	isStaleAuthRetryEligibleLease,
+	shouldRetryStaleLocalAuthFailure,
 	shouldRetryStaleLocalCursorAuthWaitOutcome,
 } from "../src/cursor-provider-stale-auth-retry.js";
-import type { CursorLiveRun } from "../src/cursor-live-run-coordinator.js";
 import type { CursorRunOutcome } from "../src/cursor-provider-run-outcome.js";
-import type { CursorProviderTurnSendResult, LocalCursorProviderTurnPrepareResult } from "../src/cursor-provider-turn-types.js";
-import type { SessionCursorAgentLease } from "../src/cursor-session-agent.js";
-import { makeUnauthenticatedConnectError } from "./helpers/cursor-unauthenticated-connect-error.js";
+import type { CursorProviderTurnPrepareResult } from "../src/cursor-provider-turn-types.js";
 
-const { mockReleaseLiveRun } = vi.hoisted(() => ({
-	mockReleaseLiveRun: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("../src/cursor-provider-live-run-drain.js", () => ({
-	cursorLiveRuns: {
-		release: mockReleaseLiveRun,
-	},
-}));
-
-function makeLocalPreparedTurn(options: {
-	created: boolean;
+function preparedTurn(options: {
+	runtimeTarget?: "local" | "cloud";
+	execution?: "conversation" | "summary";
+	created?: boolean;
 	resumed?: boolean;
-	liveRun?: CursorLiveRun;
-}): LocalCursorProviderTurnPrepareResult {
-	const { created, resumed = false, liveRun } = options;
-	const abandon = vi.fn().mockResolvedValue(undefined);
-	const restoreCursorSdkOutputFilter = vi.fn();
-	const turnCoordinator = {} as LocalCursorProviderTurnPrepareResult["runtime"]["turnCoordinator"];
+	textDeltas?: string[];
+} = {}): CursorProviderTurnPrepareResult {
+	const { runtimeTarget = "local", execution = "conversation", created = false, resumed = false, textDeltas = [] } = options;
 	return {
-		runtimeTarget: "local",
-		agent: { agentId: "agent-1" } as SDKAgent,
-		cwd: process.cwd(),
-		payload: { text: "hello" },
-		meta: {
-			sendPlan: { mode: "incremental", reason: "incremental", resetAgent: false },
-			prompt: { text: "hello", images: [] },
-			bootstrap: false,
-			promptInputTokens: 0,
-			useNativeToolReplay: false,
-			bridgeEnabled: false,
-			nativeReplayId: "replay-1",
-			agentMode: "agent",
-			modelSelection: { id: "composer-2.5" },
-		},
-		localForce: { value: false, source: "builtin", trustLevel: "builtin" },
-		contextWindowAgentId: "agent-1",
-		textDeltas: [],
-		sessionAgentScopeKey: "scope-1",
-		sessionAgentLease: {
-			scopeKey: "scope-1",
-			poolKey: "pool-1",
-			instanceId: 1,
-			agent: { agentId: "agent-1" } as SDKAgent,
-			store: {} as LocalAgentStore,
-			storeIdentity: { version: 1, stateRoot: "/tmp/store" },
-			sendState: { bootstrapped: true, contextFingerprint: "fp", incrementalSendCount: 1 },
-			created,
-			resumed,
-			commitSend: () => {},
-			trackRunCompletion: () => {},
-		} satisfies SessionCursorAgentLease,
-		restoreCursorSdkOutputFilter,
-		lifecycle: {
-			commitSend: () => {},
-			trackRunCompletion: () => {},
-			abandon,
-			dispose: async () => {},
-		},
-		runtime: liveRun
-			? { kind: "live", liveRun, turnCoordinator }
-			: { kind: "direct", turnCoordinator },
-	};
+		runtimeTarget,
+		execution,
+		sessionAgentLease: runtimeTarget === "local" && execution === "conversation" ? { created, resumed } : undefined,
+		textDeltas,
+	} as unknown as CursorProviderTurnPrepareResult;
 }
 
-function makeSendResult(): CursorProviderTurnSendResult {
+function authOutcome(): CursorRunOutcome {
 	return {
-		send: { run: { id: "run-2", cancel: vi.fn().mockResolvedValue(undefined) }, cursorAgentMessageOffset: undefined },
-		abortRegistration: undefined,
-	} as unknown as CursorProviderTurnSendResult;
+		kind: "error",
+		errorMessage: AUTH_CURSOR_SDK_ERROR_MESSAGE,
+		incompleteTools: { reason: "sdk-failure", assistantTextProduced: false },
+		waitResult: { status: "error" },
+	} as CursorRunOutcome;
 }
 
-describe("stale local Cursor auth retry", () => {
+describe("stale local Cursor auth retry eligibility", () => {
 	it.each([
-		["unauthenticated ConnectError", () => makeUnauthenticatedConnectError()],
-		["AuthenticationError", () => new AuthenticationError("expired token")],
-	])("recreates a reused pooled agent after %s on send", async (_name, makeError) => {
-		const reused = makeLocalPreparedTurn({ created: false });
-		const recreated = makeLocalPreparedTurn({ created: true });
-		const sendResult = makeSendResult();
-		const prepareTurn = vi.fn().mockResolvedValueOnce(reused).mockResolvedValueOnce(recreated);
-		const sendTurn = vi.fn().mockRejectedValueOnce(makeError()).mockResolvedValueOnce(sendResult);
-
-		const result = await prepareAndSendCursorTurnRetryingStaleAuth({ prepareTurn, sendTurn });
-
-		expect(result.prepared).toBe(recreated);
-		expect(result.sendResult).toBe(sendResult);
-		expect(prepareTurn).toHaveBeenCalledTimes(2);
-		expect(prepareTurn).toHaveBeenNthCalledWith(2, { forceCreate: true });
-		expect(sendTurn).toHaveBeenCalledTimes(2);
-		expect(reused.lifecycle.abandon).toHaveBeenCalledTimes(1);
-		expect(reused.restoreCursorSdkOutputFilter).toHaveBeenCalledTimes(1);
+		["a reused pooled agent", { created: false, resumed: false }, true],
+		["a resumed agent", { created: true, resumed: true }, true],
+		["a fresh agent", { created: true, resumed: false }, false],
+		["a Cloud turn", { runtimeTarget: "cloud" as const }, false],
+		["a summary turn", { execution: "summary" as const }, false],
+	])("recognizes %s", (_label, options, expected) => {
+		expect(isStaleAuthRetryEligibleLease(preparedTurn(options))).toBe(expected);
 	});
 
-	it("does not recreate a freshly created agent on unauthenticated send", async () => {
-		const fresh = makeLocalPreparedTurn({ created: true });
-		const error = makeUnauthenticatedConnectError();
-		const sendTurn = vi.fn().mockRejectedValue(error);
-
-		await expect(
-			prepareAndSendCursorTurnRetryingStaleAuth({
-				prepareTurn: async () => fresh,
-				sendTurn,
-			}),
-		).rejects.toBe(error);
-		expect(sendTurn).toHaveBeenCalledTimes(1);
-		expect(fresh.lifecycle.abandon).not.toHaveBeenCalled();
+	it("retries an auth wait outcome only when no user-visible text was emitted", () => {
+		expect(shouldRetryStaleLocalCursorAuthWaitOutcome(preparedTurn(), authOutcome())).toBe(true);
+		expect(shouldRetryStaleLocalCursorAuthWaitOutcome(preparedTurn({ textDeltas: ["visible answer"] }), authOutcome())).toBe(false);
+		expect(shouldRetryStaleLocalCursorAuthWaitOutcome(preparedTurn(), authOutcome(), true)).toBe(false);
 	});
 
-	it("recreates a resumed local agent after unauthenticated send", async () => {
-		const resumed = makeLocalPreparedTurn({ created: true, resumed: true });
-		const recreated = makeLocalPreparedTurn({ created: true });
-		const sendResult = makeSendResult();
-		const prepareTurn = vi.fn().mockResolvedValueOnce(resumed).mockResolvedValueOnce(recreated);
-		const sendTurn = vi.fn().mockRejectedValueOnce(makeUnauthenticatedConnectError()).mockResolvedValueOnce(sendResult);
-
-		const result = await prepareAndSendCursorTurnRetryingStaleAuth({ prepareTurn, sendTurn });
-
-		expect(result.prepared).toBe(recreated);
-		expect(result.sendResult).toBe(sendResult);
-		expect(prepareTurn).toHaveBeenNthCalledWith(2, { forceCreate: true });
-		expect(resumed.lifecycle.abandon).toHaveBeenCalledTimes(1);
-	});
-
-	it("does not retry a non-auth send failure on a reused pooled agent", async () => {
-		const reused = makeLocalPreparedTurn({ created: false });
-		const error = new Error("boom");
-		const sendTurn = vi.fn().mockRejectedValue(error);
-
-		await expect(
-			prepareAndSendCursorTurnRetryingStaleAuth({
-				prepareTurn: async () => reused,
-				sendTurn,
-			}),
-		).rejects.toBe(error);
-		expect(sendTurn).toHaveBeenCalledTimes(1);
-		expect(reused.lifecycle.abandon).not.toHaveBeenCalled();
-	});
-
-	it("recreates after run.wait stale-auth retry when no user-visible output", async () => {
-		const reused = makeLocalPreparedTurn({ created: false });
-		const recreated = makeLocalPreparedTurn({ created: true });
-		const firstSend = makeSendResult();
-		const secondSend = makeSendResult();
-		const prepareTurn = vi.fn().mockResolvedValueOnce(reused).mockResolvedValueOnce(recreated);
-		const sendTurn = vi.fn().mockResolvedValueOnce(firstSend).mockResolvedValueOnce(secondSend);
-		const afterSend = vi.fn().mockRejectedValueOnce(new CursorStaleLocalAuthRetryError()).mockResolvedValueOnce(undefined);
-
-		const result = await prepareAndSendCursorTurnRetryingStaleAuth({ prepareTurn, sendTurn, afterSend });
-
-		expect(result.prepared).toBe(recreated);
-		expect(result.sendResult).toBe(secondSend);
-		expect(firstSend.send.run.cancel).toHaveBeenCalledTimes(1);
-		expect(prepareTurn).toHaveBeenNthCalledWith(2, { forceCreate: true });
-		expect(afterSend).toHaveBeenCalledTimes(2);
-		expect(reused.lifecycle.abandon).toHaveBeenCalledTimes(1);
-	});
-
-	it("retries a wait auth-guidance outcome with no streamed text", () => {
-		const prepared = makeLocalPreparedTurn({ created: false });
-		const outcome = {
-			kind: "error",
-			errorMessage: AUTH_CURSOR_SDK_ERROR_MESSAGE,
-			incompleteTools: { reason: "sdk-failure", assistantTextProduced: false },
-			waitResult: { status: "error" },
-		} as CursorRunOutcome;
-		expect(shouldRetryStaleLocalCursorAuthWaitOutcome(prepared, outcome)).toBe(true);
-	});
-
-	it("does not retry a wait auth outcome after streamed text", () => {
-		const prepared = makeLocalPreparedTurn({ created: false });
-		prepared.textDeltas.push("hello");
-		const outcome = {
-			kind: "error",
-			errorMessage: AUTH_CURSOR_SDK_ERROR_MESSAGE,
-			incompleteTools: { reason: "sdk-failure", assistantTextProduced: false },
-			waitResult: { status: "error" },
-		} as CursorRunOutcome;
-		expect(shouldRetryStaleLocalCursorAuthWaitOutcome(prepared, outcome)).toBe(false);
-	});
-
-	it("releases a prepare-started live run when retrying stale auth", async () => {
-		const liveRun = { disposed: false } as CursorLiveRun;
-		const reused = makeLocalPreparedTurn({ created: false, liveRun });
-		const recreated = makeLocalPreparedTurn({ created: true });
-		const sendResult = makeSendResult();
-		mockReleaseLiveRun.mockClear();
-
-		const result = await prepareAndSendCursorTurnRetryingStaleAuth({
-			prepareTurn: vi.fn().mockResolvedValueOnce(reused).mockResolvedValueOnce(recreated),
-			sendTurn: vi.fn().mockRejectedValueOnce(makeUnauthenticatedConnectError()).mockResolvedValueOnce(sendResult),
-		});
-
-		expect(result.prepared).toBe(recreated);
-		expect(mockReleaseLiveRun).toHaveBeenCalledWith(liveRun);
-		expect(reused.lifecycle.abandon).not.toHaveBeenCalled();
-		expect(reused.restoreCursorSdkOutputFilter).toHaveBeenCalledTimes(1);
+	it("retries a thrown auth failure only before visible output", () => {
+		const error = new CursorStaleLocalAuthRetryError();
+		expect(shouldRetryStaleLocalAuthFailure(preparedTurn(), error)).toBe(true);
+		expect(shouldRetryStaleLocalAuthFailure(preparedTurn(), error, true)).toBe(false);
 	});
 });

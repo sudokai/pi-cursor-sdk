@@ -17,8 +17,9 @@ import {
 	createTrustIsolatedRunRoot,
 	inspectNativeTrust,
 	createProjectTrustPiRunner,
+	PROJECT_TRUST_FIXTURE_SETUP_TIMEOUT_MS,
 } from "./helpers/project-trust-contract-fixture.js";
-import { streamCursor } from "../src/cursor-provider.js";
+import { streamCursor } from "./helpers/cursor-provider-ownership.js";
 import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 
 // Separate files allow parallel CLI probes; provider globals prohibit in-file concurrency.
@@ -36,7 +37,7 @@ describe("non-interactive project trust CLI/provider contract", () => {
 
 	beforeAll(() => {
 		({ fixtureRoot, packedPackageRoot, probeExtensionPath } = createTrustIsolatedPackedFixture());
-	}, 120_000);
+	}, PROJECT_TRUST_FIXTURE_SETUP_TIMEOUT_MS);
 
 	beforeEach(async () => {
 		await resetCursorProviderTestState();

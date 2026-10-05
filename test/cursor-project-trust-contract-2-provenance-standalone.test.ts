@@ -8,12 +8,14 @@ import {
 	createTrustIsolatedRunRoot,
 	inspectNativeTrust,
 	createProjectTrustPiRunner,
+	PROJECT_TRUST_FIXTURE_SETUP_TIMEOUT_MS,
 } from "./helpers/project-trust-contract-fixture.js";
 
 // Separate files allow parallel CLI probes; provider globals prohibit in-file concurrency.
 
 describe("non-interactive project trust CLI/provider contract", () => {
 	let fixtureRoot: string;
+	let packedPackageRoot: string;
 	let probeExtensionPath: string;
 	let runRoot: string;
 	let projectDir: string;
@@ -23,8 +25,8 @@ describe("non-interactive project trust CLI/provider contract", () => {
 	let runPi: ReturnType<typeof createProjectTrustPiRunner>;
 
 	beforeAll(() => {
-		({ fixtureRoot, probeExtensionPath } = createTrustIsolatedPackedFixture());
-	}, 120_000);
+		({ fixtureRoot, packedPackageRoot, probeExtensionPath } = createTrustIsolatedPackedFixture());
+	}, PROJECT_TRUST_FIXTURE_SETUP_TIMEOUT_MS);
 
 	beforeEach(async () => {
 		await resetCursorProviderTestState();

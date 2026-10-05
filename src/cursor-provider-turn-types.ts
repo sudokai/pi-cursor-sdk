@@ -6,7 +6,7 @@ import type {
 	Model,
 	SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import type { AgentModeOption, ModelSelection, SDKAgent, SDKImage } from "@cursor/sdk";
+import type { AgentModeOption, LocalAgentStore, ModelSelection, SDKAgent, SDKImage } from "@cursor/sdk";
 import type { CursorLiveRun } from "./cursor-live-run-coordinator.js";
 import type { SessionCursorAgentLease } from "./cursor-session-agent.js";
 import type { planCursorSessionSend } from "./cursor-session-agent.js";
@@ -14,9 +14,22 @@ import type { CursorSdkEventDebugSink } from "./cursor-sdk-event-debug.js";
 import type { CursorSdkTurnCoordinator } from "./cursor-provider-turn-coordinator.js";
 import type { CursorPrompt } from "./context.js";
 import type { CursorResolvedSetting } from "./cursor-config.js";
-import type { CursorSdkTurnUsage } from "./cursor-usage-accounting.js";
+import type { CursorRequestProvenance } from "./cursor-request-provenance.js";
+import type { CursorUsageRecorder, CursorUsageTurnRecorder } from "./cursor-usage-ledger.js";
+import type { CursorSessionStoreIdentity } from "./cursor-session-store.js";
+
+import type { CursorPiToolBridge } from "./cursor-pi-tool-bridge.js";
+import type { CursorCloudLifecycleRecorder } from "./cursor-cloud-lifecycle.js";
+import type { CursorNativeToolDisplayState } from "./cursor-native-tool-display-state.js";
+import type { CursorTurnScope } from "./cursor-session-scope.js";
 
 export interface CursorProviderTurnRunnerParams {
+	scope: CursorTurnScope;
+	bridge?: CursorPiToolBridge;
+	nativeDisplay?: CursorNativeToolDisplayState;
+	recordCloudLifecycle: CursorCloudLifecycleRecorder;
+	request: CursorRequestProvenance;
+	usageRecorder: CursorUsageRecorder;
 	model: Model<Api>;
 	context: Context;
 	stream: AssistantMessageEventStream;
@@ -45,9 +58,8 @@ export interface CursorProviderTurnSendMeta {
 
 interface CursorProviderTurnRuntimeBase {
 	turnCoordinator: CursorSdkTurnCoordinator;
-	billedTurnUsage?: CursorSdkTurnUsage;
-	/** Whether the pre-send getUsage baseline succeeded for this turn. */
-	billedUsageBaselineReady?: boolean;
+	sdkRun?: Awaited<ReturnType<SDKAgent["send"]>>;
+	usageTerminalRecorded?: boolean;
 }
 
 /**
@@ -87,15 +99,30 @@ interface CursorProviderTurnPrepareResultBase {
 	lifecycle: CursorProviderTurnLifecycle;
 }
 
-export interface LocalCursorProviderTurnPrepareResult extends CursorProviderTurnPrepareResultBase {
+interface LocalCursorProviderTurnPrepareResultBase extends CursorProviderTurnPrepareResultBase {
 	runtimeTarget: "local";
+	store: LocalAgentStore;
+	storeIdentity: CursorSessionStoreIdentity;
+}
+
+export interface LocalCursorProviderTurnPrepareResult extends LocalCursorProviderTurnPrepareResultBase {
+	execution: "conversation";
 	runtime: CursorProviderTurnRuntime;
 	sessionAgentScopeKey: string;
 	sessionAgentLease: SessionCursorAgentLease;
 	localForce: CursorResolvedSetting<boolean>;
 }
 
+export interface SummaryCursorProviderTurnPrepareResult extends LocalCursorProviderTurnPrepareResultBase {
+	execution: "summary";
+	runtime: DirectCursorProviderTurnRuntime;
+	sessionAgentScopeKey?: undefined;
+	sessionAgentLease?: undefined;
+}
+
 export interface CloudCursorProviderTurnPrepareResult extends CursorProviderTurnPrepareResultBase {
+	execution: "conversation";
+	recordCloudLifecycle: CursorCloudLifecycleRecorder;
 	runtimeTarget: "cloud";
 	runtime: DirectCursorProviderTurnRuntime;
 	sessionAgentScopeKey?: undefined;
@@ -110,7 +137,11 @@ export interface CloudCursorProviderTurnPrepareResult extends CursorProviderTurn
  */
 export type CursorProviderTurnPrepareResult =
 	| LocalCursorProviderTurnPrepareResult
+	| SummaryCursorProviderTurnPrepareResult
 	| CloudCursorProviderTurnPrepareResult;
+
+/** Accounting has claimed the origin before this turn can execute a send. */
+export type StartedCursorProviderTurn = CursorProviderTurnPrepareResult & { usage: CursorUsageTurnRecorder };
 
 export interface CursorProviderTurnSend {
 	run: Awaited<ReturnType<SDKAgent["send"]>>;

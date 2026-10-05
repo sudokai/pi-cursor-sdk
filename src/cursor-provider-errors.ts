@@ -143,7 +143,10 @@ function collectConnectErrorStacks(error: unknown, record: Record<string, unknow
 
 function isConnectError(error: unknown, record: Record<string, unknown> | undefined): boolean {
 	const name = error instanceof Error ? error.name : getErrorStringField(record, "name");
-	return name === "ConnectError";
+	if (name === "ConnectError") return true;
+	// @cursor/sdk convertConnectError re-wraps backend ConnectErrors (name -> NetworkError,
+	// code -> "unavailable") and leaves the original ConnectError on `.cause` without outer details.
+	return getErrorStringField(asRecord(record?.cause), "name") === "ConnectError";
 }
 
 function isUnauthenticatedConnectCode(code: unknown): boolean {
@@ -160,13 +163,12 @@ function isCursorSdkStallAbortNetworkError(code: unknown, evidence: string, stac
 		/(?:operation was aborted|canceled)/i.test(evidence) &&
 		/(?:AbortError|operation was aborted)/i.test(`${evidence}\n${stackEvidence}`) &&
 		stackEvidence.includes("@cursor/sdk") &&
-		stackEvidence.includes("@connectrpc/connect-node") &&
 		/\b(?:onStall|reportStall|StallDetected)\b/i.test(stackEvidence)
 	);
 }
 
 /**
- * @cursor/sdk@1.0.32 throws internal RetriableError (name/kind "RetriableError") with message
+ * @cursor/sdk@1.0.35 throws internal RetriableError (name/kind "RetriableError") with message
  * "Connection stalled" or "Connection stalled repeatedly" after fetchWithRetry exhausts stalls.
  * The ConnectError is only the cause; the top-level error is not a ConnectError.
  */
@@ -181,30 +183,26 @@ export function isCursorSdkConnectionStalledError(error: unknown): boolean {
 	return /(?:^|[\\/])node_modules[\\/]@cursor[\\/]sdk[\\/]dist[\\/]/.test(stack) || stack.includes("@cursor/sdk");
 }
 
-function isCursorExtensionConnectStack(stack: string): boolean {
-	// pi runs Cursor SDK in Node, where the SDK dynamically imports connect-node.
-	// connect-web is the SDK's Bun/Deno path and is intentionally not classified for supported pi runs.
-	return stack.includes("@connectrpc/connect-node") && /(?:^|[\\/])pi-cursor-sdk(?:[\\/]|$)/.test(stack);
-}
-
 function getCursorConnectSource(error: unknown, record: Record<string, unknown> | undefined): CursorConnectErrorSource {
-	const stack = getErrorStack(error, record);
+	const stack = collectConnectErrorStacks(error, record);
+	// Node/Bun use the SDK's vendored transport; Deno uses connect-web.
 	if (stack.includes("@cursor/sdk")) return "cursor-sdk-stack";
-	if (isCursorExtensionConnectStack(stack)) return "cursor-extension-connect-stack";
-	const details = Array.isArray(record?.details) ? record.details : [];
-	const hasCursorBackendDetails = details.some((detail) => {
-		const type = getErrorStringField(asRecord(detail), "type");
-		return typeof type === "string" && type.startsWith("aiserver.");
-	});
-	if (hasCursorBackendDetails) return "cursor-backend-details";
-	return stack.includes("@connectrpc/connect-node") ? "connect-node-stack" : "generic-connect";
+	let current = record;
+	for (let depth = 0; depth < 3 && current; depth += 1) {
+		const details = Array.isArray(current.details) ? current.details : [];
+		const hasCursorBackendDetails = details.some((detail) => {
+			const type = getErrorStringField(asRecord(detail), "type");
+			return typeof type === "string" && type.startsWith("aiserver.");
+		});
+		if (hasCursorBackendDetails) return "cursor-backend-details";
+		current = asRecord(current.cause);
+	}
+	return "generic-connect";
 }
 
 export type CursorConnectErrorSource =
 	| "cursor-sdk-stack"
-	| "cursor-extension-connect-stack"
 	| "cursor-backend-details"
-	| "connect-node-stack"
 	| "generic-connect";
 
 export type CursorConnectErrorClassification =
@@ -225,18 +223,24 @@ export function classifyCursorConnectError(error: unknown): CursorConnectErrorCl
 	const evidence = collectConnectErrorEvidence(error, record);
 	const stackEvidence = collectConnectErrorStacks(error, record);
 
-	if (
-		(code === 1 || code === "canceled") &&
-		Boolean(rawMessage && /(?:operation was aborted|canceled)/i.test(rawMessage)) &&
-		(causeName === "AbortError" || /AbortError/.test(stack)) &&
-		stack.includes("@cursor/sdk") &&
-		stack.includes("@connectrpc/connect-node")
-	) {
-		return { kind: "abort", source: "cursor-sdk-stack" };
-	}
-
 	if (isCursorSdkStallAbortNetworkError(code, evidence, stackEvidence)) {
 		return { kind: "network", source: getCursorConnectSource(error, record) };
+	}
+
+	const directAbort = (code === 1 || code === "canceled") &&
+		(causeName === "AbortError" || /AbortError/.test(stack));
+	// The vendored 1.0.35 transport wraps a canceled ConnectError as Unknown.
+	// Require the observed canceled -> AbortError cause chain, not generic text.
+	const wrappedAbort = (code === 2 || code === "unknown") &&
+		causeName === "ConnectError" &&
+		(cause?.code === 1 || cause?.code === "canceled") &&
+		asRecord(cause?.cause)?.name === "AbortError";
+	if (
+		(directAbort || wrappedAbort) &&
+		Boolean(rawMessage && /(?:operation was aborted|canceled)/i.test(rawMessage)) &&
+		stack.includes("@cursor/sdk")
+	) {
+		return { kind: "abort", source: "cursor-sdk-stack" };
 	}
 
 	if (isUnauthenticatedConnectCode(code) || isLikelyAuthError(evidence)) {

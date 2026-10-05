@@ -19,11 +19,11 @@ import {
 	asMockSdkAgent,
 	asMockCursorRun,
 } from "./helpers/cursor-provider-harness.js";
-import { makeUnauthenticatedConnectError } from "./helpers/cursor-unauthenticated-connect-error.js";
 import { __testUtils as nativeToolDisplayTestUtils } from "../src/cursor-native-tool-display-state.js";
 import { CursorPiToolBridgeRunImpl } from "../src/cursor-pi-tool-bridge-run.js";
 import { __testUtils as cursorSdkProcessGuardTestUtils } from "../src/cursor-sdk-process-error-guard.js";
-import { streamCursor, __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
+import { streamCursor } from "./helpers/cursor-provider-ownership.js";
+import { __testUtils as cursorProviderTestUtils } from "../src/cursor-provider.js";
 import { __testUtils as cursorSessionResumeTestUtils } from "../src/cursor-session-agent-resume.js";
 import { __testUtils as cursorSessionScopeTestUtils } from "../src/cursor-session-scope.js";
 import { writeFileSync, rmSync } from "node:fs";
@@ -32,6 +32,20 @@ import { join } from "node:path";
 
 const emitProcessEvent = (event: string | symbol, ...args: unknown[]): boolean =>
 	(process.emit as (event: string | symbol, ...args: unknown[]) => boolean).call(process, event, ...args);
+
+
+// Synthetic auth input with a normalized frame from the retained .35 transport capture.
+function makeUnauthenticatedConnectError(): Error & { rawMessage: string; code: number } {
+	const error = new Error("[unauthenticated] Error") as Error & { rawMessage: string; code: number };
+	error.name = "ConnectError";
+	error.rawMessage = "Error";
+	error.code = 16;
+	error.stack =
+		"ConnectError: [unauthenticated] Error\n" +
+		"    at file:///repo/node_modules/@connectrpc/connect/dist/esm/protocol-connect/error-json.js:53:19\n" +
+		"    at file:///repo/node_modules/@cursor/sdk/dist/esm/769.js:1:19228";
+	return error;
+}
 
 describe("streamCursor auth and abort", () => {
 	beforeEach(resetCursorProviderTestState);

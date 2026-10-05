@@ -1,10 +1,12 @@
 import type { LocalAgentStore } from "@cursor/sdk";
 import type { ExtensionAPI, ExtensionCommandContext, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { resolveEffectiveCursorConfig } from "./cursor-runtime-state.js";
+import { getCursorSessionSettings } from "./cursor-session-settings.js";
 import { asRecord, getString } from "./cursor-record-utils.js";
 import { fsyncExistingRegularFile } from "./cursor-durable-fs.js";
 import { scrubSensitiveText } from "./cursor-sensitive-text.js";
 import { loadCursorSdk } from "./cursor-sdk-runtime.js";
-import { getCursorSessionScopeKey } from "./cursor-session-scope.js";
+import { cursorSessionScopeKeyForManager } from "./cursor-session-scope.js";
 import {
 	CURSOR_SESSION_AGENT_RESUME_ENTRY_TYPE,
 	isCursorLocalAgentId,
@@ -16,9 +18,11 @@ import {
 	type CursorSessionAgentResumeScope,
 } from "./cursor-session-agent-resume.js";
 import {
-	cursorSessionStoreIdentitiesEqual,
-	getCursorSessionStoreIdentities,
+	withCursorSessionStoreIdentities,
 	openCursorSessionStore,
+	resolveCursorSessionStoreIdentity,
+	isCanonicalConfiguredSessionStoreIdentity,
+	isCanonicalDefaultSessionStoreIdentity,
 } from "./cursor-session-store.js";
 
 export const CURSOR_SESSION_AGENT_CLEANUP_ENTRY_TYPE = "cursor-sdk-agent-cleanup";
@@ -95,7 +99,7 @@ function getCurrentCleanupScope(ctx: LocalResumeCleanupCommandContext): CursorSe
 	const sessionId = ctx.sessionManager.getSessionId();
 	const repoRoot = resolveCursorSessionRepoRoot(ctx.cwd);
 	return {
-		scopeKey: getCursorSessionScopeKey(),
+		scopeKey: cursorSessionScopeKeyForManager(ctx.sessionManager),
 		...(sessionFile ? { sessionFile } : {}),
 		...(sessionId ? { sessionId } : {}),
 		cwd: ctx.cwd,
@@ -298,7 +302,7 @@ export async function runCursorSessionAgentCleanupCommand(pi: LocalResumeCleanup
 		return;
 	}
 
-	if (!appendDurableCleanupEntry(pi, ctx, { action: "delete", phase: "intent", ...baseEntry })) {
+	if (!scope.sessionFile || !appendDurableCleanupEntry(pi, ctx, { action: "delete", phase: "intent", ...baseEntry })) {
 		ctx.ui.notify("Cleanup intent could not be durably recorded. No agents were deleted.", "error");
 		return;
 	}
@@ -307,31 +311,43 @@ export async function runCursorSessionAgentCleanupCommand(pi: LocalResumeCleanup
 	const failedAgentIds: CursorSessionAgentCleanupFailure[] = [];
 	const openedStores = new Map<string, Awaited<ReturnType<typeof openCursorSessionStore>>>();
 	try {
-		const operations = await getSdkOperations();
-		const identities = await getCursorSessionStoreIdentities(ctx.cwd, scope.scopeKey, scope.sessionFile !== undefined);
-		for (const candidate of plan.candidates) {
-			const { agentId } = candidate;
-			try {
-				const identity = candidate.storeIdentity ?? identities.defaultStore;
-				if (
-					!cursorSessionStoreIdentitiesEqual(identity, identities.defaultStore) &&
-					!cursorSessionStoreIdentitiesEqual(identity, identities.sessionStore)
-				) throw new InvalidCursorSessionStoreIdentityError("Recorded Cursor local store identity is not valid for this pi session");
-				let openedStore = openedStores.get(identity.stateRoot);
-				if (!openedStore) {
-					openedStore = await openCursorSessionStore(ctx.cwd, identity);
-					openedStores.set(identity.stateRoot, openedStore);
+		const storeRootBase = resolveEffectiveCursorConfig({
+			cwd: ctx.cwd, scopeKey: scope.scopeKey,
+			projectTrusted: getCursorSessionSettings(scope.scopeKey).projectTrusted,
+		}).local.storeRoot.value;
+		await withCursorSessionStoreIdentities(ctx.cwd, scope.scopeKey, async (identities) => {
+			const operations = await getSdkOperations();
+			for (const candidate of plan.candidates) {
+				const { agentId } = candidate;
+				try {
+					// Identityless legacy entries belong to the SDK default, never a newly configured base.
+					if (storeRootBase !== undefined && !candidate.storeIdentity) {
+						throw new Error("Restore the default Cursor local store configuration before cleaning this legacy agent");
+					}
+					const identity = await resolveCursorSessionStoreIdentity({
+						cwd: ctx.cwd, scopeKey: scope.scopeKey,
+						identities, recordedIdentity: candidate.storeIdentity, agentId,
+					});
+					if (!identity) throw new InvalidCursorSessionStoreIdentityError("Recorded Cursor local store identity is not valid for this pi session");
+					let openedStore = openedStores.get(identity.stateRoot);
+					if (!openedStore) {
+						openedStore = await openCursorSessionStore(ctx.cwd, identity, identities.defaultStore.stateRoot);
+						openedStores.set(identity.stateRoot, openedStore);
+					}
+					await operations.delete(agentId, { cwd: ctx.cwd, store: openedStore.store });
+					deletedAgentIds.push(agentId);
+				} catch (error) {
+					failedAgentIds.push({
+						agentId,
+						error: scrubSensitiveText(getString(asRecord(error), "message") ?? String(error)),
+						...(error instanceof InvalidCursorSessionStoreIdentityError
+						&& !isCanonicalConfiguredSessionStoreIdentity(ctx.cwd, scope.scopeKey, candidate.storeIdentity)
+						&& !isCanonicalDefaultSessionStoreIdentity(ctx.cwd, scope.scopeKey, candidate.storeIdentity)
+							? { retryable: false } : {}),
+					});
 				}
-				await operations.delete(agentId, { cwd: ctx.cwd, store: openedStore.store });
-				deletedAgentIds.push(agentId);
-			} catch (error) {
-				failedAgentIds.push({
-					agentId,
-					error: scrubSensitiveText(getString(asRecord(error), "message") ?? String(error)),
-					...(error instanceof InvalidCursorSessionStoreIdentityError ? { retryable: false } : {}),
-				});
 			}
-		}
+		}, storeRootBase);
 	} catch (error) {
 		const message = scrubSensitiveText(getString(asRecord(error), "message") ?? String(error));
 		failedAgentIds.push(...plan.candidateAgentIds.map((agentId) => ({ agentId, error: message })));

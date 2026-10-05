@@ -58,7 +58,7 @@ function getCursorToolBoundaryText(
 	options: Pick<CursorPromptOptions, "agentMode" | "includePiAskQuestionGuidance"> & { hasToolManifest?: boolean; includePiBridgeGuidance?: boolean } = {},
 ): string {
 	const includePiBridgeGuidance = options.includePiBridgeGuidance !== false;
-	const includePiAskQuestionGuidance = includePiBridgeGuidance && options.includePiAskQuestionGuidance !== false;
+	const includePiAskQuestionGuidance = includePiBridgeGuidance && options.includePiAskQuestionGuidance === true;
 	const lines = [
 		"Cursor SDK tool boundary:",
 		"Call only Cursor SDK/MCP tools exposed in this run; pi history names, replay labels, and transcript names are not callable.",
@@ -66,7 +66,8 @@ function getCursorToolBoundaryText(
 			? "For exposed pi bridge tools, call pi__* MCP names, not pi card/history names."
 			: undefined,
 		"Do not claim pi-side or WebSearch/WebFetch tools unless Cursor ran an equivalent tool.",
-		includePiAskQuestionGuidance ? "Use pi__cursor_ask_question for material choices if exposed." : undefined,
+		"Do not comment on GitHub issues or PRs unless the user asked.",
+		includePiAskQuestionGuidance ? "Use pi__cursor_ask_question only if the user asked to be prompted." : undefined,
 		getCursorPlanModeToolGuidanceText(options.agentMode, { includePiBridgeGuidance }),
 		"Images: only latest user images are sent; ask to reattach prior images.",
 	].filter((line): line is string => line !== undefined);
@@ -425,6 +426,14 @@ export function buildCursorIncrementalPrompt(context: Context, options: CursorPr
 		budgetOptions,
 	);
 	return { text: parts.join(SECTION_SEPARATOR), images };
+}
+
+/** Native compaction/tree instructions are already a complete summarization request. */
+export function buildCursorSummaryPrompt(context: Context): CursorPrompt {
+	const { systemPrompt } = resolveCursorPiContext(context);
+	const sections = normalizePiContextMessages(context.messages).map(formatMessage).filter((text): text is string => text !== undefined);
+	if (systemPrompt) sections.unshift(`System instructions from pi:\n${systemPrompt}`);
+	return { text: sections.join(SECTION_SEPARATOR), images: [] };
 }
 
 export function buildCursorPrompt(context: Context, options: CursorPromptOptions = {}): CursorPrompt {

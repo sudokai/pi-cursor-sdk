@@ -9,11 +9,50 @@ import {
 	type CursorDeltaHandler,
 	mockCreatedAgent,
 	asMockCursorRun,
+	createPiHarness,
 } from "./helpers/cursor-provider-harness.js";
-import { streamCursor } from "../src/cursor-provider.js";
+import { captureProviderTestOwnership, streamCursor } from "./helpers/cursor-provider-ownership.js";
+import { registerCursorNativeToolDisplayState } from "../src/cursor-native-tool-display-state.js";
+import { streamCursor as streamOwnedCursor } from "../src/cursor-provider.js";
 
 describe("streamCursor usage accounting", () => {
 	beforeEach(resetCursorProviderTestState);
+
+	it("blocks SDK send when the captured usage claim cannot be appended", async () => {
+		const send = vi.fn();
+		const dispose = vi.fn().mockResolvedValue(undefined);
+		mockCreatedAgent({ send, [Symbol.asyncDispose]: dispose });
+		const model = makeModel();
+		const context = makeContext();
+		const pi = createPiHarness();
+		registerCursorNativeToolDisplayState(pi);
+		const ownership = captureProviderTestOwnership(model, context, undefined, pi);
+		pi.appendEntry.mockImplementation(() => { throw new Error("claim write failed"); });
+		const events = await collectEvents(streamOwnedCursor(model, context, { apiKey: "test-key" }, ownership));
+		expect(getErrorEvent(events).error.errorMessage).toContain("claim write failed");
+		expect(send).not.toHaveBeenCalled();
+		expect(dispose).toHaveBeenCalledOnce();
+	});
+
+	it.each(["finished", "error", "cancelled"] as const)("records the actual %s terminal on the captured origin", async status => {
+		const model = makeModel();
+		const context = makeContext();
+		const pi = createPiHarness();
+		registerCursorNativeToolDisplayState(pi);
+		const ownership = captureProviderTestOwnership(model, context, undefined, pi);
+		mockCreatedAgent({ send: vi.fn(async () => {
+			expect(pi.appendEntry).toHaveBeenCalledWith("pi-cursor-sdk:usage-origin-v1", expect.any(Object));
+			return asMockCursorRun({
+				id: "run-accounted", agentId: "agent-1", status,
+				wait: vi.fn().mockResolvedValue({ id: "run-accounted", status, result: "done" }),
+			});
+		}) });
+		await collectEvents(streamOwnedCursor(model, context, { apiKey: "test-key" }, ownership));
+		expect(pi.appendEntry).toHaveBeenCalledWith("pi-cursor-sdk:usage-v1", expect.objectContaining({
+			kind: "terminal", status: status === "finished" ? "success" : status === "cancelled" ? "abort" : "error",
+			origin: expect.objectContaining({ sessionFile: undefined }),
+		}));
+	});
 
 	it("ignores returned RunResult usage when no turn-ended usage was applied", async () => {
 		const mockSend = vi.fn().mockResolvedValue(asMockCursorRun({
@@ -93,18 +132,13 @@ describe("streamCursor usage accounting", () => {
 
 		expect(done.message.usage.input).toBe(25_432 - 24_000 - 123);
 		expect(done.message.usage.output).toBe(612);
-		// SDK billing sums stay off the overflow-visible pi fields (carried on cursorSdk).
-		expect(done.message.usage.cacheRead).toBe(0);
-		expect(done.message.usage.cacheWrite).toBe(0);
-		expect((done.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 24_000,
-			cacheWriteTokens: 123,
-		});
+		expect(done.message.usage.cacheRead).toBe(24_000);
+		expect(done.message.usage.cacheWrite).toBe(123);
 		expect(done.message.usage.totalTokens).toBeGreaterThan(0);
 		expect(done.message.usage.totalTokens).toBeLessThan(makeModel().contextWindow);
 	});
 
-	it("keeps over-window turn-ended spend and bounds occupancy", async () => {
+	it("rejects over-window turn-ended counts and bounds the approximate occupancy", async () => {
 		const mockSend = vi.fn().mockImplementation(async (_msg: unknown, opts: { onDelta: CursorDeltaHandler }) => {
 			opts.onDelta({ update: { type: "text-delta", text: "done" } });
 			opts.onDelta({
@@ -135,12 +169,7 @@ describe("streamCursor usage accounting", () => {
 
 		expect(done.message.usage.cacheRead).toBe(0);
 		expect(done.message.usage.cacheWrite).toBe(0);
-		expect((done.message.usage as { cursorSdk?: { cacheReadTokens: number } }).cursorSdk).toMatchObject({
-			cacheReadTokens: 1_015_493,
-			cacheWriteTokens: 0,
-		});
-		expect(done.message.usage.input).toBe(1_125_429 - 1_015_493);
-		expect(done.message.usage.output).toBe(7_049);
+		expect(done.message.usage.totalTokens).toBeLessThan(1000);
 		// pi-ai silent-overflow invariant: input + cacheRead must never exceed the window.
 		expect(done.message.usage.input + done.message.usage.cacheRead).toBeLessThanOrEqual(makeModel().contextWindow);
 		expect(done.message.usage.totalTokens).toBeLessThan(1_125_429);

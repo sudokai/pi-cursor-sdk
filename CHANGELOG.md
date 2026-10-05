@@ -2,19 +2,69 @@
 
 ## Unreleased
 
+## 0.5.1 - 2026-10-05
+
+### Added
+
+- Support trusted config-defined Cursor custom subagents with independent model selections and session pool invalidation (adapted from #208 by Sam Armstrong). Local SDK subagents retain only model IDs.
+- Allow owned per-cwd/session persistent local stores beneath a configured `local.storeRoot` or `PI_CURSOR_SDK_STATE_ROOT`, preserving default SDK migration when unset (adapted from #236 by @gwatkins-arista).
+
 ### Fixed
 
 - Recreate a reused pooled or resumed local Cursor SDK agent and retry the turn once when the SDK reports unauthenticated/expired auth after idle, using `Agent.create()`. Retry covers both `Agent.send()` failure and `run.wait()` failure with no user-visible output. A newly created non-resumed agent or a second unauthenticated failure surfaces scrubbed authentication detail; explicit API-key rejection retains setup guidance.
 - Load user-invoked `/skill:name` skills through `cursor_activate_skill` even when `disable-model-invocation` keeps them out of the Cursor catalog, instead of returning `Skill not available`.
+- Bound artifact gzip output during compression at the existing public size cap, retaining the same fail-closed limit evidence and individual test deadlines.
+- Retain canonical default-store cleanup candidates across configured-root changes, and refuse legacy identityless cleanup under a custom root until the default is restored.
+- Give compatibility build, verification and native contracts separate bounded phases; stop timed-out POSIX command descendants before deleting their isolated workspace. Keep individual test deadlines unchanged.
+- Keep Cursor SDK and bridge imports in Pi’s static extension graph so compiled-Bun launchers can resolve them; initialize the native parser vendor path before the SDK loads.
+- Preserve network classification through real SDK UNAVAILABLE error wrappers while keeping bounded, scrubbed cause provenance.
+- Protect owned pending pi bridge calls, including human questions, from live-run idle disposal. Restart the normal cleanup window after the last pending call settles; explicit cancellation and shutdown still release the run.
+- Match started and completed shell aliases with identical arguments when SDK callback IDs differ, avoiding false missing-completion cards while retaining genuinely unmatched shell diagnostics. Adapted from #258.
+- Tell Cursor to comment on GitHub issues and PRs only when the user asks.
+
+### Changed
+
+- Upgrade development-only ConnectRPC to 2.2.0, retaining the Cursor SDK’s own Connect 1.7.0/Protobuf 1.10.0 transport graph and SDK-relative error-wrapper contracts.
+- Upgrade the bundled MCP bridge cohort to `@modelcontextprotocol/hono@2.0.2` and its required `@modelcontextprotocol/server@2.3.1` peer, Hono 4.13.13, and the development-only MCP client 2.3.1, retaining bounded JSON-body parsing and Host/Origin rejection before request dispatch.
+- Add default-visible `PI_CURSOR_FOOTER`; set it to `0` to hide Cursor runtime/fast/mode/transport status without changing provider behavior.
+- Add `PI_CURSOR_LIVE_RUN_IDLE_DISPOSE_MS` to configure eligible local replay idle cleanup, preserving owned pending-call protection and immediate explicit release (adapted from #283 by @aaalexliu).
+- `cursor_ask_question` now requires `PI_CURSOR_ASK_QUESTION=1`; Cursor proceeds with a stated assumption by default.
+- Add opt-in `PI_CURSOR_HIDE_MODELS_WHEN_LOGGED_OUT` while keeping provider login. Recheck catalog auth at session start or explicit refresh with owned warning state, retry after discovery failures, and discard superseded/shutdown results (adapted from #300/#301 by @yansigit). `/login` and `/logout` still require explicit refresh for immediate catalog changes.
+- Upgrade the exact Cursor SDK dependency to 1.0.35. Preserve recorded local resume and cleanup ownership across its MD5-to-SHA256 workspace-root migration, without merging stores; share atomic same-cwd ownership from first root derivation through admission and store disposal.
+- Add fail-closed rejection of links/non-directories inside SDK/extension-owned store layouts before migration, opening, or temporary removal; higher user-managed ancestor links remain supported as in 0.5.0. Malformed recorded identities fall back or become non-retryable cleanup candidates without unbounded path traversal.
+- Stop suppressing unrelated connect-node-only network process errors during active Cursor turns; SDK-vendored and backend-detail provenance remain scoped.
+- Qualify vendored Node transport abort/stall provenance and HTTP/2 defaults, and keep scoped MCP timeout overrides independent of minified class/argument names. Refresh catalog generator provenance to SDK 1.0.35; the 45-model metadata and checkpoint limits are unchanged.
+- Upgrade root TypeBox validation to 1.3.35 and align direct Pi dependencies with lockfile-resolved 1.0.3 transitives and nested TypeBox 1.3.27; update Vitest to 5.0.3.
+
+## 0.5.0 - 2026-10-04
+
+### Breaking Changes
+
+- Bare `ctx.modelRegistry.complete(...)` and `ctx.modelRegistry.streamSimple(...)` calls are unsupported for Cursor models because they lack native session ownership receipts. Custom compaction and other integrations must use the owning AgentSession's stream path or an independent child AgentSession; bind/refresh/reload does not migrate bare calls. See [embedding migration guidance](README.md#embedded-sessions-report-concurrent-cursor-turns).
+
+### Changed
+
+- Refresh the SDK-derived fallback catalog to 45 models, including Claude Sonnet 5.5, GLM 5.3, and GLM 5.3 Flash. Preserve existing checkpoint-derived context windows.
+
+### Fixed
+
+- Isolate concurrent and nested in-process Cursor sessions, including direct compaction/tree/bug-report streams, bridge/replay state, pooled agents, storage, journals, and debug artifacts (#217, #234). Native request-header ownership receipts reject mismatched shared ModelRuntime calls with recovery guidance rather than choosing a sibling.
+- Keep cloud archive/delete authority, intents, and results in the command's originating session branch across auth/SDK waits and owner reload/shutdown; unstarted child reload/shutdown no longer closes a parent's live pool.
 - Restore native replay wrapper ownership after `/new`, `/resume`, reloads, and session switches without replacing third-party tools (#203).
 - Apply configured `models.json` cost rates to mapped token usage with Pi's native pricing helper; default rates and Cursor billed amounts are unchanged (#230, #231; thanks @TianZuo555).
 - Resolve the installed Cursor SDK native parser package before SDK initialization, preserving absolute `CURSOR_TREE_SITTER_VENDOR_DIR` overrides (#232).
 - Improve diagnostics with bounded, scrubbed structured errors and causes without diagnosing loader or ambiguous session-authentication failures as invalid API keys. Compiled/embedded-host failures remain unresolved; eligible stale local sessions retry once with a fresh agent.
 - Bound bridge tool-call IDs while preserving unique calls and matching results (#237; thanks @gwatkins-arista).
-- Keep skill activation callable with its catalog/descriptions intact and a stable system prompt (#244).
+- Keep skill activation callable with its catalog/descriptions intact and a stable system prompt (#244). Each registered session owns its skill catalog, so a sibling's same-named skill or catalog reset cannot change activation.
 - Map SDK `reasoning_effort` controls to Pi thinking without changing SDK defaults.
-- Stop post-compaction occupancy floors from reusing retained pre-compaction measurements, including after Pi converts the summary to a user message. Use the compaction timestamp rather than comparing token totals, so genuine new context can grow past the old `tokensBefore` value without being discarded.
-- Suppress the SDK missing tree-sitter natives warning so it does not leak into pi's TUI.
+- Repair context floors using the owning native projection, actual request equivalence, model compatibility, and source order after compaction/context edits—not timestamps, summary-looking text, or `tokensBefore`. Keep fresh LOCAL SDK usage authoritative and native components coherent so cumulative bills cannot trigger repeated false compaction.
+- Isolate LOCAL compaction/tree summaries in fresh text-only agents and temporary stores, without conversation tools/MCP/bridge/manifest/replay, plan mode, or resume lineage. Await cleanup before summary terminal emission; ordinary capabilities remain intact.
+- Preserve every raw turn and original reported/terminal snapshot separately from disjoint public billed data in durable origin/branch journals. Remove process-only UUID watermarks; retain delayed/revised/aggregate-only/error/abort/reopen facts without inventing branch attribution.
+
+### Added
+
+- `/cursor-usage` view, bounded public billing refresh, exclusive private JSON export, and recovery help, leaving Pi's default footer and configured-price estimates intact. Reports unavailable/pending settlement, shared or unknown history, journal gaps, other-branch facts and unclaimed records honestly. No private billing fallback or native invoice-total claim.
+- Offline working-tree qualification for exact official Pi releases without committing, including native compaction, summary cleanup and billing regressions.
 
 ## 0.4.0 - 2026-09-26
 

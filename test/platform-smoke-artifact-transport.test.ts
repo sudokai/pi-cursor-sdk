@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const artifactsModule = "../scripts/platform-smoke/artifacts.mjs";
 
@@ -31,6 +31,21 @@ function encodeBinaryText(value: string, encoding: "utf16le" | "utf16be" | "utf3
 }
 
 describe("platform smoke artifact transport", () => {
+	// Cold native compilation has a 30s cap; keep it outside individual test deadlines.
+	beforeAll(async () => {
+		if (process.platform === "win32") return;
+		const { extractPlatformArtifactBundle, formatPlatformArtifactBundle } = await import(artifactsModule);
+		const out = mkdtempSync(join(tmpdir(), "platform-extractor-ready-"));
+		try {
+			const content = Buffer.from("ready");
+			expect(extractPlatformArtifactBundle(out, formatPlatformArtifactBundle({ files: [
+				{ path: "ready.txt", size: content.length, contentBase64: content.toString("base64") },
+			] })).ok).toBe(true);
+		} finally {
+			rmSync(out, { recursive: true, force: true });
+		}
+	}, 35_000);
+
 	const duplicateSecret = "credential-free-review-secret-123456789";
 	const duplicateCases = [
 		{ name: "auth field", text: `{"apiKey":"${duplicateSecret}","apiKey":"placeholder"}`, violation: "potential auth/token assignment" },
@@ -574,7 +589,40 @@ try {
 		expect(result.stdout).toContain('"packed":true');
 	});
 
+	it("bounds actual gzip output at the public compressed bundle cap", () => {
+		const script = `
+			import assert from 'node:assert/strict';
+			import zlib from 'node:zlib';
+			import { syncBuiltinESMExports } from 'node:module';
+			const { MAX_COMPRESSED_BUNDLE_BYTES } = await import('./scripts/platform-smoke/artifact-bundle-contract.mjs');
+			const original = zlib.gzipSync;
+			let calls = 0;
+			zlib.gzipSync = (input, options) => {
+				assert.equal(options.maxOutputLength, MAX_COMPRESSED_BUNDLE_BYTES);
+				calls++;
+				return original(input, options);
+			};
+			syncBuiltinESMExports();
+			const { formatPlatformArtifactBundle } = await import('./scripts/platform-smoke/artifacts.mjs');
+			const output = formatPlatformArtifactBundle({ files: [{ path: 'evidence/result.txt', contentBase64: 'b2s=', size: 2 }] });
+			assert.equal(calls, 1);
+			assert.match(output, /gzip-base64/);
+			const failure = new Error('unrelated compressor failure');
+			zlib.gzipSync = () => { throw failure; };
+			syncBuiltinESMExports();
+			assert.throws(() => formatPlatformArtifactBundle({ files: [] }), error => error === failure);
+		`;
+		const result = run(process.execPath, ["--input-type=module", "-e", script]);
+		expect(result.status, result.stderr).toBe(0);
+	});
+
 	it("fails closed when the artifact writer exceeds count, aggregate, or compressed limits", async () => {
+		let phaseStarted = performance.now();
+		const recordPhase = (phase: string) => {
+			const now = performance.now();
+			if (process.env.CI) process.stderr.write(`artifact-writer-limits ${phase}: ${Math.round(now - phaseStarted)}ms\n`);
+			phaseStarted = now;
+		};
 		const artifactsModule = "../scripts/platform-smoke/artifacts.mjs";
 		const {
 			buildPlatformArtifactBundle,
@@ -584,18 +632,23 @@ try {
 			MAX_BUNDLE_FILE_COUNT,
 			writePlatformArtifactBundle,
 		} = await import(artifactsModule);
+		recordPhase("module-import");
 		const root = mkdtempSync(join(tmpdir(), "bundle-writer-limits-"));
 		const out = mkdtempSync(join(tmpdir(), "bundle-writer-limits-out-"));
 		const readLimitReasons = (bundle: { files: Array<{ contentBase64: string }> }) => JSON.parse(Buffer.from(bundle.files[0]!.contentBase64, "base64").toString("utf8")).reasons as string[];
 		try {
 			for (let index = 0; index <= MAX_BUNDLE_FILE_COUNT; index++) writeFileSync(join(root, `${index}.txt`), "x");
+			recordPhase("count-setup");
 			expect(readLimitReasons(buildPlatformArtifactBundle(root, "evidence"))).toContain("file-count");
+			recordPhase("count-build");
 
 			rmSync(root, { recursive: true, force: true });
 			mkdirSync(root, { recursive: true });
 			const content = Buffer.alloc(MAX_BUNDLE_FILE_BYTES, 65);
 			for (let index = 0; index <= MAX_BUNDLE_AGGREGATE_BYTES / MAX_BUNDLE_FILE_BYTES; index++) writeFileSync(join(root, `${index}.txt`), content);
+			recordPhase("aggregate-setup");
 			expect(readLimitReasons(buildPlatformArtifactBundle(root, "evidence"))).toContain("aggregate-bytes");
+			recordPhase("aggregate-build");
 
 			rmSync(root, { recursive: true, force: true });
 			mkdirSync(root, { recursive: true });
@@ -603,6 +656,7 @@ try {
 				const incompressibleText = randomBytes(3_375_000).toString("base64");
 				writeFileSync(join(root, `${index}.ansi`), incompressibleText);
 			}
+			recordPhase("compressed-setup");
 			let stdoutText = "";
 			const stdout = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
 				stdoutText += chunk.toString();
@@ -614,12 +668,15 @@ try {
 			} finally {
 				stdout.mockRestore();
 			}
+			recordPhase("compressed-write");
 			expect(readLimitReasons(bundle)).toContain("platform artifact bundle exceeds compressed limit");
 			expect(extractPlatformArtifactBundle(out, stdoutText).ok).toBe(process.platform !== "win32");
 			expect(existsSync(join(out, "evidence", "bundle-limit-exceeded.json"))).toBe(process.platform !== "win32");
+			recordPhase("extract");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(out, { recursive: true, force: true });
+			recordPhase("cleanup");
 		}
 	}, 20_000);
 

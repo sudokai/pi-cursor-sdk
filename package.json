@@ -1,6 +1,6 @@
 {
   "name": "pi-cursor-sdk",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "description": "pi provider extension backed by @cursor/sdk local and cloud agents",
   "author": "Mitch Fultz (https://github.com/fitchmultz)",
   "license": "MIT",
@@ -121,7 +121,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "check:compat": "npm run build && npm run verify && node --test test/native-provider.test.mjs test/native-cursor-flow.test.mjs",
+    "check:compat": "npm run build && npm run verify && node --test test/ci-compatibility.test.mjs test/native-provider.test.mjs test/native-cursor-flow.test.mjs",
     "build": "node ./scripts/build.mjs",
     "prepare": "node ./scripts/prepare.mjs",
     "typecheck": "npm run typecheck:src && npm run typecheck:tests && npm run typecheck:replay-compile",
@@ -162,11 +162,11 @@
     "smoke:platform:all": "npm run smoke:platform:doctor && node scripts/platform-smoke.mjs run --target macos,ubuntu,windows-native"
   },
   "dependencies": {
-    "@cursor/sdk": "1.0.32",
-    "@hono/node-server": "2.1.1",
-    "@modelcontextprotocol/hono": "2.0.1",
-    "@modelcontextprotocol/server": "2.1.0",
-    "hono": "4.13.9"
+    "@cursor/sdk": "1.0.35",
+    "@hono/node-server": "2.1.3",
+    "@modelcontextprotocol/hono": "2.0.2",
+    "@modelcontextprotocol/server": "2.3.1",
+    "hono": "4.13.13"
   },
   "bundledDependencies": [
     "@hono/node-server",
@@ -181,18 +181,19 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.99.1",
-    "@earendil-works/pi-coding-agent": "0.99.1",
-    "@earendil-works/pi-tui": "0.99.1",
-    "@modelcontextprotocol/client": "2.1.0",
-    "@types/node": "24.19.0",
+    "@connectrpc/connect": "2.2.0",
+    "@earendil-works/pi-ai": "1.0.3",
+    "@earendil-works/pi-coding-agent": "1.0.3",
+    "@earendil-works/pi-tui": "1.0.3",
+    "@modelcontextprotocol/client": "2.3.1",
+    "@types/node": "24.19.1",
     "@typescript/typescript6": "6.0.2",
     "@xterm/xterm": "6.0.0",
     "node-pty": "1.1.0",
     "playwright": "1.63.0",
-    "typebox": "1.3.27",
+    "typebox": "1.3.35",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.3"
   },
   "pi": {
     "extensions": [

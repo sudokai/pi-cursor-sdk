@@ -29,14 +29,12 @@ type CursorActivateSkillParams = {
 };
 
 interface CursorSkillActivationDetails {
-	name?: string;
-	filePath?: string;
-	baseDir?: string;
+	name: string;
+	filePath: string;
+	baseDir: string;
 	resources: string[];
 	availableSkillNames: string[];
 }
-
-let currentSkillsByName = new Map<string, Skill>();
 
 function escapeXml(value: string): string {
 	return value
@@ -50,18 +48,6 @@ function escapeXml(value: string): string {
 function getVisibleSkills(skills: Iterable<Skill> | undefined): Skill[] {
 	if (!skills) return [];
 	return [...skills].filter((skill) => !skill.disableModelInvocation);
-}
-
-function setCurrentSkills(skills: readonly Skill[] | undefined): void {
-	// Keep explicit-only skills (`disable-model-invocation`) in the lookup map so
-	// `/skill:name` can still load them. Do not list them in the prompt catalog.
-	currentSkillsByName = new Map((skills ?? []).map((skill) => [skill.name, skill]));
-}
-
-function getCatalogSkillNames(): string[] {
-	return getVisibleSkills(currentSkillsByName.values())
-		.map((skill) => skill.name)
-		.sort();
 }
 
 function resolveEffectiveRuntimeForSkillLifecycle(
@@ -186,16 +172,6 @@ async function listSkillResourcePaths(baseDir: string): Promise<string[]> {
 	return resources;
 }
 
-function buildActivationDetails(skill: Skill | undefined, resources: string[] = []): CursorSkillActivationDetails {
-	return {
-		name: skill?.name,
-		filePath: skill?.filePath,
-		baseDir: skill ? dirname(skill.filePath) : undefined,
-		resources,
-		availableSkillNames: getCatalogSkillNames(),
-	};
-}
-
 function formatSkillResources(resources: readonly string[]): string {
 	if (resources.length === 0) return "<skill_resources />";
 	return [
@@ -219,6 +195,34 @@ function wrapSkillContent(skill: Skill, content: string, resources: readonly str
 }
 
 export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
+	let currentSkillsByName = new Map<string, Skill>();
+	let exposeStableToolBeforeSkills = true;
+
+	function setCurrentSkills(skills: readonly Skill[] | undefined): void {
+		// Retain explicit-only skills for a user-invoked /skill:name lookup.
+		currentSkillsByName = new Map((skills ?? []).map((skill) => [skill.name, skill]));
+	}
+
+	function getCatalogSkillNames(): string[] {
+		return getVisibleSkills(currentSkillsByName.values())
+			.map((skill) => skill.name)
+			.sort();
+	}
+
+	function syncCursorSkillToolForModel(model: ExtensionContext["model"], runtime: CursorRuntime): void {
+		const activeToolNames = new Set(pi.getActiveTools());
+		const shouldBeActive = !arePiToolsDisabled(pi) && shouldExposeSkillTool(model, runtime)
+			&& (currentSkillsByName.size > 0 || exposeStableToolBeforeSkills);
+		const alreadyActive = activeToolNames.has(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		if (shouldBeActive === alreadyActive) return;
+		if (shouldBeActive) {
+			activeToolNames.add(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		} else {
+			activeToolNames.delete(CURSOR_ACTIVATE_SKILL_TOOL_NAME);
+		}
+		pi.setActiveTools([...activeToolNames]);
+	}
+
 	pi.registerTool({
 		name: CURSOR_ACTIVATE_SKILL_TOOL_NAME,
 		label: "Cursor skill",
@@ -238,7 +242,7 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 			const skill = currentSkillsByName.get(requestedName);
 			if (!skill) {
 				throw new Error(
-					`Skill not available: ${requestedName}. Catalog skills: ${getCatalogSkillNames().join(", ") || "none"}.`,
+					`Skill not available: ${requestedName}. Available skills: ${getCatalogSkillNames().join(", ") || "none"}.`,
 				);
 			}
 
@@ -249,7 +253,13 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 				]);
 				return {
 					content: [{ type: "text" as const, text: wrapSkillContent(skill, content, resources) }],
-					details: buildActivationDetails(skill, resources),
+					details: {
+						name: skill.name,
+						filePath: skill.filePath,
+						baseDir: dirname(skill.filePath),
+						resources,
+						availableSkillNames: getCatalogSkillNames(),
+					} satisfies CursorSkillActivationDetails,
 				};
 			} catch (error) {
 				throw new Error(
@@ -259,9 +269,14 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 		},
 	});
 
-	const clearSkillsAndSync = (model: ExtensionContext["model"], runtime: CursorRuntime = "local"): void => {
+	const clearSkillsAndSync = (
+		model: ExtensionContext["model"],
+		runtime: CursorRuntime = "local",
+		exposeStableTool = true,
+	): void => {
 		setCurrentSkills([]);
-		syncCursorSkillToolForModel(pi, model, runtime);
+		exposeStableToolBeforeSkills = exposeStableTool;
+		syncCursorSkillToolForModel(model, runtime);
 	};
 
 	registerCursorModelLifecycle(pi, {
@@ -269,34 +284,28 @@ export function registerCursorSkillTool(pi: CursorSkillToolExtensionApi): void {
 			clearSkillsAndSync(ctx.model);
 		},
 		modelSelect: (event) => {
-			clearSkillsAndSync(event.model);
+			clearSkillsAndSync(event.model, "local", false);
 		},
 		turnStart: (_event, ctx) => {
 			const cursorModel = isCursorModel(ctx.model);
 			const runtime = resolveEffectiveRuntimeForSkillLifecycle(cursorModel, ctx);
 			if (!cursorModel || runtime === "cloud") setCurrentSkills([]);
-			syncCursorSkillToolForModel(pi, ctx.model, runtime);
+			syncCursorSkillToolForModel(ctx.model, runtime);
 		},
 		beforeAgentStart: (event, ctx) => {
 			const cursorModel = isCursorModel(ctx.model);
 			const runtime = resolveEffectiveRuntimeForSkillLifecycle(cursorModel, ctx);
 			if (cursorModel && runtime === "local") {
 				setCurrentSkills(event.systemPromptOptions?.skills);
+				exposeStableToolBeforeSkills = true;
 			} else {
 				setCurrentSkills([]);
+				exposeStableToolBeforeSkills = false;
 			}
-			syncCursorSkillToolForModel(pi, ctx.model, runtime);
+			syncCursorSkillToolForModel(ctx.model, runtime);
 			const resolved = resolveCursorSkillSystemPrompt(event.systemPrompt, ctx.model, event.systemPromptOptions, runtime);
 			if (resolved === event.systemPrompt) return undefined;
 			return { systemPrompt: resolved };
 		},
 	});
 }
-
-export const __testUtils = {
-	AVAILABLE_SKILLS_SECTION_PATTERN,
-	buildActivationDetails,
-	setCurrentSkills,
-	listSkillResourcePaths,
-	wrapSkillContent,
-};

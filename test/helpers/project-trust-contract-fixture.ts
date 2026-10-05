@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,7 +14,9 @@ const trustManagerUrl = pathToFileURL(join(dirname(piCli), "core/trust-manager.j
 const rpcFramingText = "RPC framing: x\u2028y\u2029z \uD83D\uDC08";
 const OS_ENV_KEYS = new Set(["PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TMPDIR", "TMP", "TEMP"]);
 
-type PiMode = "print" | "json" | "rpc";
+export const PROJECT_TRUST_FIXTURE_SETUP_TIMEOUT_MS = 180_000;
+
+export type PiMode = "print" | "json" | "rpc";
 type MarkerEvent = {
 	event: string;
 	mode?: string;
@@ -112,11 +114,20 @@ function preparePackedProbeExtension(fixtureRoot: string): { packedPackageRoot: 
 	const extract = spawnSync("tar", ["-xzf", `pack/${tarballName}`, "-C", "extract"], {
 		cwd: fixtureRoot,
 		encoding: "utf8",
-		timeout: 30_000,
+		timeout: 60_000,
 	});
 	expect(extract.error).toBeUndefined();
 	expect(extract.status, extract.stderr).toBe(0);
 	const packedPackageRoot = join(extractDir, "package");
+	// The tarball intentionally leaves @cursor/sdk unbundled; supply its installed
+	// runtime dependency even though this trust probe never sends a Cursor turn.
+	const cursorScope = join(packedPackageRoot, "node_modules", "@cursor");
+	mkdirSync(cursorScope, { recursive: true });
+	symlinkSync(
+		join(packageRoot, "node_modules", "@cursor", "sdk"),
+		join(cursorScope, "sdk"),
+		process.platform === "win32" ? "junction" : "dir",
+	);
 	expect(existsSync(join(packedPackageRoot, "src", "index.ts"))).toBe(true);
 	const probeExtensionPath = join(packedPackageRoot, "src", "project-trust-contract-probe.ts");
 	writeFileSync(probeExtensionPath, `
@@ -182,8 +193,16 @@ export function createTrustIsolatedRunRoot(fixtureRoot: string) {
 /** Pack the current checkout with a trust probe extension in a resource-free temp ancestry. */
 export function createTrustIsolatedPackedFixture(): { fixtureRoot: string; packedPackageRoot: string; probeExtensionPath: string } {
 	const fixtureRoot = createTrustIsolatedFixtureRoot();
-	const { packedPackageRoot, probeExtensionPath } = preparePackedProbeExtension(fixtureRoot);
-	return { fixtureRoot, packedPackageRoot, probeExtensionPath };
+	try {
+		const { packedPackageRoot, probeExtensionPath } = preparePackedProbeExtension(fixtureRoot);
+		return { fixtureRoot, packedPackageRoot, probeExtensionPath };
+	} catch (error) {
+		try {
+			rmSync(fixtureRoot, { recursive: true, force: true });
+		} finally {
+			throw error;
+		}
+	}
 }
 
 interface ProjectTrustRunContext {

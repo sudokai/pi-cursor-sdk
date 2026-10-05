@@ -11,6 +11,9 @@ import type { CursorNativeToolDisplayItem } from "../src/cursor-native-tool-disp
 import type { CursorPiToolBridgeRun } from "../src/cursor-pi-tool-bridge.js";
 import {
 	cursorLiveRuns,
+	CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV,
+	resetCursorNativeReplayIdleDisposeMs,
+	setCursorNativeReplayIdleDisposeMs,
 	drainCursorLiveRunTurn,
 } from "../src/cursor-provider-live-run-drain.js";
 import { AUTH_CURSOR_SDK_ERROR_MESSAGE, CursorStaleLocalAuthRetryError } from "../src/cursor-provider-errors.js";
@@ -43,10 +46,11 @@ function makeCursorSdkAbortConnectError(): Error & { rawMessage: string; code: n
 	error.rawMessage = "This operation was aborted";
 	error.code = 1;
 	error.cause = new DOMException("This operation was aborted", "AbortError");
+	// Synthetic canceled input; vendored frames are from the retained SDK 1.0.35 offline capture.
 	error.stack =
 		"ConnectError: [canceled] This operation was aborted\n" +
-		"    at file:///repo/node_modules/@connectrpc/connect-node/dist/esm/node-universal-client.js:293:63\n" +
-		"    at file:///repo/node_modules/@cursor/sdk/dist/esm/index.js:8:1086456\n" +
+		"    at i (file:///repo/node_modules/@cursor/sdk/dist/esm/769.js:1:809)\n" +
+		"    at AbortSignal.l (file:///repo/node_modules/@cursor/sdk/dist/esm/769.js:1:13744)\n" +
 		"Caused by: AbortError";
 	return error;
 }
@@ -60,6 +64,8 @@ function makeBridgeRun(id: string, pendingPiToolCallIds: string[] = []): CursorP
 		takeQueuedToolRequests: vi.fn(() => []),
 		resolveToolResults: vi.fn().mockResolvedValue(undefined),
 		resolveToolResultsFromContext: vi.fn().mockResolvedValue(undefined),
+		hasPendingToolCalls: () => pending.size > 0,
+		onPendingToolCallsChanged: () => () => {},
 		hasPendingPiToolCallId: vi.fn((piToolCallId: string) => pending.has(piToolCallId)),
 		isBridgeMcpToolCall: vi.fn(() => false),
 		setOnToolRequest: vi.fn(),
@@ -101,6 +107,62 @@ describe("cursor live run coordinator", () => {
 		vi.useRealTimers();
 	});
 
+	it.each(["bridgeRun", "sessionBridgeRun"] as const)("keeps configured idle disposal deferred for pending owned calls on %s", async slot => {
+		const original = process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV];
+		process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV] = "25";
+		resetCursorNativeReplayIdleDisposeMs();
+		vi.useFakeTimers();
+		let pending = true;
+		let changed = () => {};
+		const bridge = makeBridgeRun("bridge-configured");
+		bridge.hasPendingToolCalls = () => pending;
+		bridge.onPendingToolCallsChanged = listener => { changed = listener; return () => {}; };
+		const run = cursorLiveRuns.start({ id: "configured-pending", agent: makeAgent(), promptInputTokens: 0, [slot]: bridge });
+		try {
+			cursorLiveRuns.requestIdleDispose(run);
+			await vi.advanceTimersByTimeAsync(300001);
+			expect(run.disposed).toBe(false);
+			expect(bridge.cancel).not.toHaveBeenCalled();
+			pending = false;
+			changed();
+			await vi.advanceTimersByTimeAsync(24);
+			expect(run.disposed).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(run.disposed).toBe(true);
+		} finally {
+			await cursorLiveRuns.release(run);
+			resetCursorNativeReplayIdleDisposeMs();
+			if (original === undefined) delete process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV];
+			else process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV] = original;
+		}
+	});
+
+	it("preserves explicit release of a pending call and test override precedence over environment", async () => {
+		const original = process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV];
+		process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV] = "2147483647";
+		setCursorNativeReplayIdleDisposeMs(2);
+		vi.useFakeTimers();
+		const eligible = cursorLiveRuns.start({ id: "configured-override", agent: makeAgent(), promptInputTokens: 0 });
+		const bridge = makeBridgeRun("explicit-pending", ["question-call"]);
+		const pending = cursorLiveRuns.start({ id: "configured-explicit", agent: makeAgent(), promptInputTokens: 0, bridgeRun: bridge });
+		try {
+			cursorLiveRuns.requestIdleDispose(eligible);
+			cursorLiveRuns.requestIdleDispose(pending);
+			await vi.advanceTimersByTimeAsync(2);
+			expect(eligible.disposed).toBe(true);
+			expect(pending.disposed).toBe(false);
+			await cursorLiveRuns.release(pending);
+			expect(pending.disposed).toBe(true);
+			expect(bridge.cancel).toHaveBeenCalledOnce();
+		} finally {
+			await cursorLiveRuns.release(eligible);
+			await cursorLiveRuns.release(pending);
+			resetCursorNativeReplayIdleDisposeMs();
+			if (original === undefined) delete process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV];
+			else process.env[CURSOR_LIVE_RUN_IDLE_DISPOSE_ENV] = original;
+		}
+	});
+
 	it("matches context tool results after trailing user messages and ignores disposed runs", async () => {
 		const { coordinator } = makeCoordinator();
 		const run = startRun(coordinator, { id: "cursor-replay-1" });
@@ -111,11 +173,11 @@ describe("cursor live run coordinator", () => {
 		]);
 
 		expect(hasTrailingUserMessagesAfterToolResults(context)).toBe(true);
-		expect(coordinator.getPendingFromContext(context, replayIdFromToolCallId)).toBe(run);
+		expect(coordinator.getPendingFromContext(context, replayIdFromToolCallId, run.sessionAgentScopeKey)).toBe(run);
 
 		await coordinator.release(run);
 
-		expect(coordinator.getPendingFromContext(context, replayIdFromToolCallId)).toBeUndefined();
+		expect(coordinator.getPendingFromContext(context, replayIdFromToolCallId, run.sessionAgentScopeKey)).toBeUndefined();
 	});
 
 	it("drops bridge events whose pending call expired before tool emission", () => {
@@ -307,6 +369,75 @@ describe("cursor live run coordinator", () => {
 		expect(abandonSessionAgent).toHaveBeenCalledWith("scope-1");
 	});
 
+	it.each(["bridgeRun", "sessionBridgeRun"] as const)("defers idle disposal for owned pending calls on %s and restarts the full window after settlement", async (slot) => {
+		vi.useFakeTimers();
+		const { coordinator } = makeCoordinator({ idleDisposeMs: 300_000 });
+		let pending = true;
+		let notify = () => {};
+		const unsubscribe = vi.fn();
+		const bridge = makeBridgeRun("owned-question");
+		bridge.hasPendingToolCalls = () => pending;
+		bridge.onPendingToolCallsChanged = (listener) => { notify = listener; return unsubscribe; };
+		const run = startRun(coordinator, { [slot]: bridge });
+		const sibling = startRun(coordinator, { id: "sibling", scopeKey: "other-scope" });
+		const cancel = vi.fn().mockResolvedValue(undefined);
+		coordinator.attachSdkRun(run, { cancel });
+		coordinator.requestIdleDispose(run);
+		coordinator.requestIdleDispose(sibling);
+		await vi.advanceTimersByTimeAsync(300_001);
+		expect(run.disposed).toBe(false);
+		expect(sibling.disposed).toBe(true);
+		expect(cancel).not.toHaveBeenCalled();
+		pending = false;
+		notify();
+		await vi.advanceTimersByTimeAsync(299_999);
+		expect(run.disposed).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(run.disposed).toBe(true);
+		expect(cancel).toHaveBeenCalledOnce();
+		expect(unsubscribe).toHaveBeenCalledOnce();
+	});
+
+	it("deduplicates identical bridge slots, rechecks silent pending state, and tolerates unsubscribe failures", async () => {
+		vi.useFakeTimers();
+		const { coordinator } = makeCoordinator({ idleDisposeMs: 5 });
+		let pending = false;
+		const unsubscribe = vi.fn(() => { throw new Error("detach failed"); });
+		const bridge = makeBridgeRun("same-bridge");
+		bridge.hasPendingToolCalls = () => pending;
+		bridge.onPendingToolCallsChanged = vi.fn(() => unsubscribe);
+		const run = startRun(coordinator, { bridgeRun: bridge, sessionBridgeRun: bridge });
+		coordinator.requestIdleDispose(run);
+		pending = true;
+		await vi.advanceTimersByTimeAsync(10);
+		expect(run.disposed).toBe(false);
+		expect(bridge.onPendingToolCallsChanged).toHaveBeenCalledOnce();
+		await coordinator.release(run);
+		expect(unsubscribe).toHaveBeenCalledOnce();
+		expect(bridge.cancel).toHaveBeenCalledOnce();
+		expect(coordinator.count()).toBe(0);
+	});
+
+	it("cancels an armed idle timer when a call becomes pending and preserves explicit release", async () => {
+		vi.useFakeTimers();
+		const { coordinator } = makeCoordinator({ idleDisposeMs: 5 });
+		let pending = false;
+		let notify = () => {};
+		const bridge = makeBridgeRun("owned-question");
+		bridge.hasPendingToolCalls = () => pending;
+		bridge.onPendingToolCallsChanged = (listener) => { notify = listener; return () => {}; };
+		const run = startRun(coordinator, { bridgeRun: bridge });
+		coordinator.requestIdleDispose(run);
+		await vi.advanceTimersByTimeAsync(4);
+		pending = true;
+		notify();
+		await vi.advanceTimersByTimeAsync(30);
+		expect(run.disposed).toBe(false);
+		await coordinator.release(run);
+		expect(run.disposed).toBe(true);
+		expect(bridge.cancel).toHaveBeenCalledOnce();
+	});
+
 	it("releases successful runs idempotently without abandoning pooled session resources", async () => {
 		vi.useFakeTimers();
 		const { coordinator, deleteNativeToolDisplay, abandonSessionAgent } = makeCoordinator({ idleDisposeMs: 5 });
@@ -396,6 +527,6 @@ describe("cursor live run coordinator", () => {
 			{ role: "toolResult", toolCallId: "pi-call-1", toolName: "read", content: [], isError: false, timestamp: 2 },
 		]);
 
-		expect(coordinator.getPendingFromContext(context, replayIdFromToolCallId)).toBe(run);
+		expect(coordinator.getPendingFromContext(context, replayIdFromToolCallId, run.sessionAgentScopeKey)).toBe(run);
 	});
 });

@@ -1,3 +1,5 @@
+// Install the external SDK transport mock before the static provider dependency graph evaluates.
+import "./helpers/cursor-provider-harness.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -6,6 +8,7 @@ import type { ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-a
 import { CURSOR_HTTP1_ENV } from "../src/cursor-config.js";
 import {
 	__testUtils,
+	CURSOR_FOOTER_ENV,
 	getCursorCliConfig,
 	getCursorSessionConfig,
 	registerCursorRuntimeControls,
@@ -14,6 +17,7 @@ import { CURSOR_CLOUD_ACK_DISCLOSURE } from "../src/cursor-runtime-state.js";
 import {
 	__testUtils as cursorSessionScopeTestUtils,
 	registerCursorSessionScope,
+	getCursorSessionScopeSnapshot,
 } from "../src/cursor-session-scope.js";
 import { __testUtils as modelDiscoveryTestUtils } from "../src/model-discovery.js";
 import {
@@ -24,11 +28,14 @@ import {
 } from "./helpers/pi-harness.js";
 import {
 	collectEvents,
+	getErrorEvent,
 	mockCreatedAgent,
 	mockedCreate,
 	resetCursorProviderTestState,
 } from "./helpers/cursor-provider-harness.js";
 import { streamCursor } from "../src/cursor-provider.js";
+import { registerCursorNativeToolDisplayState } from "../src/cursor-native-tool-display-state.js";
+import { captureProviderTestOwnership } from "./helpers/cursor-provider-ownership.js";
 
 const RUNTIME_ENV_NAMES = [
 	"PI_CURSOR_RUNTIME",
@@ -37,6 +44,7 @@ const RUNTIME_ENV_NAMES = [
 	"PI_CURSOR_CLOUD_SKIP_REVIEWER_REQUEST",
 	"PI_CURSOR_CLOUD_ACK",
 	CURSOR_HTTP1_ENV,
+	CURSOR_FOOTER_ENV,
 ] as const;
 
 function createCursorRuntimeHarness(options: {
@@ -130,6 +138,41 @@ describe("Cursor cloud runtime state", () => {
 		originalEnv.clear();
 		rmSync(tmpAgentDir, { recursive: true, force: true });
 		vi.clearAllMocks();
+	});
+
+	it.each(["0", "false", "off", "none", "no", "disabled", " OFF "])("clears an existing footer when PI_CURSOR_FOOTER=%s", async value => {
+		const harness = createCursorRuntimeHarness();
+		await harness.pi.invokeEventWithContext("session_start", { type: "session_start", reason: "startup" }, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", "cursor:local · fast:off");
+		process.env[CURSOR_FOOTER_ENV] = value;
+		await harness.pi.invokeEventWithContext("session_tree", { type: "session_tree", oldLeafId: null, newLeafId: null }, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", undefined);
+		process.env[CURSOR_FOOTER_ENV] = "1";
+		await harness.pi.invokeEventWithContext("session_tree", { type: "session_tree", oldLeafId: null, newLeafId: null }, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", "cursor:local · fast:off");
+	});
+
+	it.each([undefined, "", "unknown", "1", "true", "on", "yes", "enabled"])("keeps the default footer visible for PI_CURSOR_FOOTER=%s", async value => {
+		if (value !== undefined) process.env[CURSOR_FOOTER_ENV] = value;
+		const harness = createCursorRuntimeHarness({ cursorRuntimeFlag: "cloud" });
+		await harness.pi.invokeEventWithContext("session_start", { type: "session_start", reason: "startup" }, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", "cursor:cloud · fast:n/a");
+	});
+
+	it("rejects an invalid runtime before SDK creation with the footer hidden", async () => {
+		await resetCursorProviderTestState();
+		process.env[CURSOR_FOOTER_ENV] = "0";
+		process.env.PI_CURSOR_RUNTIME = "remote";
+		const harness = createCursorRuntimeHarness();
+		await harness.pi.invokeEventWithContext("session_start", { type: "session_start", reason: "startup" }, harness.ctx);
+		expect(harness.ctx.ui.setStatus).toHaveBeenLastCalledWith("cursor", undefined);
+		registerCursorNativeToolDisplayState(harness.pi);
+		const model = makeModel("gpt-5.5@1m");
+		const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] };
+		const ownership = captureProviderTestOwnership(model, context, undefined, harness.pi);
+		const events = await collectEvents(streamCursor(model, context, { apiKey: "offline-key" }, ownership));
+		expect(getErrorEvent(events).error.errorMessage).toContain("Invalid PI_CURSOR_RUNTIME");
+		expect(mockedCreate).not.toHaveBeenCalled();
 	});
 
 	it("shows cloud runtime status from CLI and environment selection", async () => {
@@ -240,6 +283,7 @@ describe("Cursor cloud runtime state", () => {
 
 	it("preserves invalid CLI cloud environment type for cloud preflight", async () => {
 		const pi = createPiHarness({ flagValues: { "cursor-cloud-env-type": "poll" } });
+		registerCursorSessionScope(pi);
 		registerCursorRuntimeControls(pi);
 		await pi.runSessionStart({ model: makeModel("gpt-5.5@1m") });
 		expect(getCursorCliConfig().cloud?.environment).toEqual({ type: "poll" });
@@ -627,12 +671,15 @@ describe("Cursor cloud model selection", () => {
 				"cursor-cloud-ack": true,
 				[flag]: true,
 			} });
+			registerCursorSessionScope(pi);
+			registerCursorNativeToolDisplayState(pi);
 			registerCursorRuntimeControls(pi);
 			await pi.runSessionStart({ model: makeModel(modelId) });
 			await collectEvents(streamCursor(makeModel(modelId), {
 				systemPrompt: "Be helpful.",
 				messages: [{ role: "user", content: "hello", timestamp: 1 }],
-			}, { apiKey: "test-key" }));
+			}, { apiKey: "test-key" }, captureProviderTestOwnership(makeModel(modelId), { messages: [] }, getCursorSessionScopeSnapshot(pi), pi)));
+			await pi.runSessionShutdown({ reason: "quit" });
 		}
 
 		expect(mockedCreate.mock.calls.map(([options]) =>

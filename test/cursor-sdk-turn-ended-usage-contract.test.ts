@@ -6,7 +6,6 @@ import { TurnEndedUpdateSchema } from "@cursor/sdk";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import {
 	applyCursorUsage,
-	isCursorSdkUsageStructurallyValid,
 	readCursorSdkTurnUsageFromUpdate,
 } from "../src/cursor-usage-accounting.js";
 import { resolveInstalledPackageRoot } from "./helpers/installed-package.js";
@@ -125,13 +124,16 @@ describe("installed Cursor SDK turn-ended usage contract", () => {
 			expect(TurnEndedUpdateSchema.safeParse(update).success).toBe(true);
 			const turn = readCursorSdkTurnUsageFromUpdate(update);
 			expect(turn).toEqual(sample.usage);
-			expect(isCursorSdkUsageStructurallyValid(turn!)).toBe(true);
 
 			const partial = makeAssistantMessage();
 			applyCursorUsage(partial, model, context, 7, { runtime: "local", turn: turn! });
+			expect(partial.usage).toMatchObject({
+				input: sample.usage.inputTokens - sample.usage.cacheReadTokens - sample.usage.cacheWriteTokens,
+				output: sample.usage.outputTokens,
+				cacheRead: sample.usage.cacheReadTokens,
+				cacheWrite: sample.usage.cacheWriteTokens,
+			});
 			expect(partial.usage).toMatchObject(fixture.expectedPiMappingFromRawTurnEnded[index]!);
-			expect(partial.usage.cacheRead).toBe(0);
-			expect(partial.usage.cacheWrite).toBe(0);
 			// Explicitly reject the published SDK additive total for raw local turn-ended samples.
 			const publishedAdditiveTotal =
 				sample.usage.inputTokens +

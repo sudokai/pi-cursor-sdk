@@ -67,7 +67,7 @@ describe("cursor-session-agent", () => {
 
 		expect(storeMock.openSqliteStore).toHaveBeenCalledWith({
 			workspaceRef: "/tmp/project",
-			stateRoot: toNamespacedPath(buildCursorSessionStateRoot("/tmp/cursor-sdk-state", scopeKey, true)),
+			stateRoot: toNamespacedPath(buildCursorSessionStateRoot("/tmp/cursor-sdk-state/workspace", scopeKey)),
 		});
 		expect(createAgent.mock.calls[0][0].local?.store).toBe(storeMock.stores[0]);
 		expect(lease.store).toBe(storeMock.stores[0]);
@@ -493,11 +493,8 @@ describe("cursor-session-agent", () => {
 		expect(storeMock.stores[1].dispose).not.toHaveBeenCalled();
 	});
 
-	it("keeps a delayed fileless acquisition temporary after session scope becomes persisted", async () => {
-		let resolveDefaultStateRoot: (stateRoot: string) => void = () => {};
-		const getDefaultStateRoot = vi.fn(() => new Promise<string>((resolve) => {
-			resolveDefaultStateRoot = resolve;
-		}));
+	it("keeps a fileless acquisition temporary when scope becomes persisted before it completes", async () => {
+		const getDefaultStateRoot = vi.fn(() => "/tmp/cursor-sdk-state/workspace");
 		const storeMock = installCursorSessionStoreMock(getDefaultStateRoot);
 		const createAgent = vi.fn().mockResolvedValue({
 			agentId: "agent-fileless",
@@ -512,11 +509,10 @@ describe("cursor-session-agent", () => {
 			modelSelection: { id: "composer-2.5" },
 			createAgent,
 		});
-		await vi.waitFor(() => expect(getDefaultStateRoot).toHaveBeenCalledTimes(1));
 		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/persisted.jsonl", "persisted");
-		resolveDefaultStateRoot("/tmp/cursor-sdk-state");
 
 		await acquire;
+		expect(getDefaultStateRoot).not.toHaveBeenCalled();
 		expect(storeMock.openedOptions[0].stateRoot).toContain("pi-cursor-sdk");
 		expect(storeMock.openedOptions[0].stateRoot).not.toContain("cursor-sdk-state");
 	});
@@ -637,6 +633,7 @@ describe("cursor-session-agent", () => {
 
 		registerCursorSessionAgentLifecycle(pi);
 		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/test.jsonl");
+		await pi.runSessionStart({ cwd: "/tmp/project", sessionManager: { getSessionFile: () => "/tmp/sessions/test.jsonl" } });
 		await acquireSessionCursorAgent({
 			apiKey: "test-key",
 			agentMode: "agent" as const,
@@ -661,6 +658,7 @@ describe("cursor-session-agent", () => {
 
 		registerCursorSessionAgentLifecycle(pi);
 		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/test.jsonl");
+		await pi.runSessionStart({ cwd: "/tmp/project", sessionManager: { getSessionFile: () => "/tmp/sessions/test.jsonl" } });
 		const params = {
 			apiKey: "test-key",
 			agentMode: "agent" as const,
@@ -784,7 +782,7 @@ describe("cursor-session-agent", () => {
 
 		registerCursorSessionScope(pi);
 		registerCursorSessionAgentLifecycle(pi);
-		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/session-a.jsonl");
+		await pi.runSessionStart({ cwd: "/tmp/project", sessionManager: { getSessionFile: () => "/tmp/sessions/session-a.jsonl" } });
 		await acquireSessionCursorAgent({
 			apiKey: "test-key",
 			agentMode: "agent" as const,
@@ -843,6 +841,7 @@ describe("cursor-session-agent", () => {
 
 		registerCursorSessionAgentLifecycle(pi);
 		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/test.jsonl");
+		await pi.runSessionStart({ cwd: "/tmp/project", sessionManager: { getSessionFile: () => "/tmp/sessions/test.jsonl" } });
 		await acquireSessionCursorAgent({
 			apiKey: "test-key",
 			agentMode: "agent" as const,
@@ -867,6 +866,7 @@ describe("cursor-session-agent", () => {
 
 		registerCursorSessionAgentLifecycle(pi);
 		cursorSessionScopeTestUtils.set("/tmp/project", "/tmp/sessions/test.jsonl");
+		await pi.runSessionStart({ cwd: "/tmp/project", sessionManager: { getSessionFile: () => "/tmp/sessions/test.jsonl" } });
 		const params = {
 			apiKey: "test-key",
 			agentMode: "agent" as const,

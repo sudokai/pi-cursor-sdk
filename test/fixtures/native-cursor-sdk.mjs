@@ -1,18 +1,36 @@
-// Offline transport fixture matching installed @cursor/sdk 1.0.32's public
-// SDKAgent/Run/AgentUsage contracts. Pi and the extension are not mocked.
+// Offline transport fixture matching the installed @cursor/sdk public
+// SDKAgent/Run/AgentUsage contracts (dist/esm/{agent,run,usage-types}.d.ts).
+// Controlled failures use RunResult's documented error/cancelled statuses;
+// heldCwds controls transport completion, not Pi scheduling or attribution.
+// Pi and the extension are not mocked.
 import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
 export const state = globalThis[Symbol.for("pi-cursor-native-fixture")] ??= {
   created: [], sends: [], disposed: [], cancelled: [], bridgeResults: [], stores: [],
+  heldCwds: new Set(), failedCwds: new Set(),
+  configured: [], defaultRootCwds: [],
+  usageByCwd: new Map(),
+  cloudMutations: [],
 };
 export const Cursor = {
-  configure() {},
-  models: { list: async () => [{ id: "fixture", displayName: "Offline Cursor fixture" }] },
+  configure(options) { state.configured.push(options); },
+  models: { list: async () => [{
+    id: "fixture", displayName: "Offline Cursor fixture",
+    parameters: [{ id: "fast", displayName: "Fast", values: [{ value: "false" }, { value: "true" }] }],
+    variants: [{ params: [{ id: "fast", value: "false" }], displayName: "Offline Cursor fixture", isDefault: true }],
+  }] },
 };
-export const getDefaultSdkStateRoot = () => join(process.env.PI_CODING_AGENT_DIR, "cursor-state");
+export const getDefaultSdkStateRoot = (cwd) => {
+  state.defaultRootCwds.push(cwd);
+  return join(process.env.PI_CODING_AGENT_DIR, "cursor-state");
+};
 export const SqliteLocalAgentStore = {
   open: async (options) => {
+    // Materialize the controlled store root so cleanup assertions exercise
+    // extension-owned filesystem removal, not an already absent directory.
+    await mkdir(options.stateRoot, { recursive: true });
     const store = { ...options, dispose: async () => { store.disposed = true; } };
     state.stores.push(store);
     return store;
@@ -20,20 +38,39 @@ export const SqliteLocalAgentStore = {
 };
 export const createAgentPlatform = async () => ({ checkpointStore: { loadLatest: async () => undefined } });
 export const Agent = {
+  archive: async (agentId) => {
+    state.cloudMutations.push({ action: "archive", agentId });
+    state.cloudMutationWait?.entered.resolve();
+    await state.cloudMutationWait?.release.promise;
+  },
+  delete: async (agentId) => {
+    state.cloudMutations.push({ action: "delete", agentId });
+    state.cloudMutationWait?.entered.resolve();
+    await state.cloudMutationWait?.release.promise;
+  },
   messages: { list: async () => [] },
   create: async (options) => {
-    const agentId = `agent-fixture-${state.created.length + 1}`;
+    const index = state.created.length + 1;
+    const agentId = options.cloud
+      ? `bc-00000000-0000-0000-0000-${index.toString(16).padStart(12, "0")}`
+      : `agent-fixture-${index}`;
     state.created.push({ agentId, options });
     const runs = [];
     return {
       agentId,
       model: options.model,
       listArtifacts: async () => [],
-      getUsage: async () => ({ usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0, totalTokens: 15 }, runs }),
+      getUsage: async () => {
+        const control = state.usageByCwd.get(options.local?.cwd);
+        if (control && !control.billed) throw new Error("offline controlled usage unavailable");
+        const bill = control?.billed ?? { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0, totalTokens: 15 };
+        const usage = runs.reduce((sum, run) => Object.fromEntries(Object.keys(bill).map(key => [key, sum[key] + run.usage[key]])), Object.fromEntries(Object.keys(bill).map(key => [key, 0])));
+        return { usage, runs };
+      },
       [Symbol.asyncDispose]: async () => { state.disposed.push(agentId); },
       send: async (message, sendOptions) => {
         const index = state.sends.length + 1;
-        state.sends.push({ agentId, message, mode: sendOptions.mode });
+        state.sends.push({ agentId, message, mode: sendOptions.mode, force: sendOptions.local?.force });
         const id = `run-fixture-${index}`;
         const request = [...message.text.matchAll(/(?:^|\n)User: ([^\n]*)/g)].at(-1)?.[1] ?? "";
         let status = "running";
@@ -41,8 +78,10 @@ export const Agent = {
         const completion = new Promise((resolve) => { settle = resolve; });
         const finish = (result) => {
           status = "finished";
-          sendOptions.onDelta({ update: { type: "turn-ended", usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0 } } });
-          runs.push({ runId: `usage-${index}`, usage: { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0, totalTokens: 15 } });
+          const control = state.usageByCwd.get(options.local?.cwd);
+          const raw = control ? control.raw : { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0 };
+          sendOptions.onDelta({ update: { type: "turn-ended", usage: raw } });
+          runs.push({ runId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`, usage: control?.billed ?? { inputTokens: 10, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 0, totalTokens: 15 } });
           settle({ id, status, result });
         };
         const run = {
@@ -54,10 +93,15 @@ export const Agent = {
           wait: () => completion,
           cancel: async () => { status = "cancelled"; state.cancelled.push(id); settle({ id, status }); },
         };
-        if (request.includes("CANCEL_FIXTURE")) return run;
+        if (request.includes("CANCEL_FIXTURE") || state.heldCwds.has(options.local?.cwd)) return run;
+        if (state.failedCwds.delete(options.local?.cwd)) {
+          status = "error";
+          settle({ id, status, error: { message: "offline controlled run failure" } });
+          return run;
+        }
         setTimeout(async () => {
           try {
-            if (request.includes("BRIDGE_FIXTURE")) {
+            if (options.tools?.length !== 0 && request.includes("BRIDGE_FIXTURE")) {
               const client = new Client({ name: "offline-cursor", version: "1" });
               const transport = new StreamableHTTPClientTransport(new URL(options.mcpServers.pi_tools.url));
               try {
@@ -78,7 +122,7 @@ export const Agent = {
                 await transport.close();
               }
             }
-            if (request.includes("REPLAY_FIXTURE")) {
+            if (options.tools?.length !== 0 && request.includes("REPLAY_FIXTURE")) {
               const args = { path: "never-read.txt" };
               const callId = `${id}-read`;
               const modelCallId = `${callId}-model`;
